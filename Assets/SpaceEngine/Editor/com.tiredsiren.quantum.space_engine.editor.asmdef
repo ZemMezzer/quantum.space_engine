@@ -1,0 +1,17 @@
+{
+    "name": "com.tiredsiren.quantum.space_engine.editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:c3ac1702014b94142b7be2c1d83c4027",
+        "GUID:e0cd26848372d4e5c891c569017e11f1"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,11 @@
+{
+  "name": "com.tiredsiren.quantum.space_engine",
+  "version": "1.0.0",
+  "displayName": "Space Engine",
+  "description": "A space engine for Quantum.",
+  "unity": "2021.3",
+  "author": {
+    "name": "Zem"
+  },
+  "licensesUrl": "https://github.com/ZemMezzer/Mediator/blob/master/LICENSE"
+}
