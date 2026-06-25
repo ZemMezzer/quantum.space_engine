@@ -1071,7 +1071,327 @@ internal static class ReferenceFrameLayerUtility
     /// GalaxySpaceStreamer, which uses real SolarSystemLocationData and can
     /// hand off exactly to a solar-system LOD.
     /// </summary>
-    public sealed class GalaxyStarfieldRenderer
+        public sealed class GalaxyGasRenderer
+    {
+        private const float VolumeRadiusInGalaxyRadii = 1.18f;
+
+        private SeamlessSpaceAnchor spaceAnchor;
+        private Camera celestialCamera;
+        private LayerMask celestialLayer = 0;
+        private bool enabled = true;
+        private int raymarchSteps = 40;
+        private float brightness = 1.0f;
+        private float opacity = 1.25f;
+        private float dustStrength = 0.9f;
+        private float diskRadiusMultiplier = 1.0f;
+        private float diskThicknessMultiplier = 1.0f;
+
+        private Mesh _runtimeFullscreenMesh;
+        private Material _runtimeMaterial;
+        private MaterialPropertyBlock _propertyBlock;
+
+        internal void Configure(
+            SeamlessSpaceAnchor anchor,
+            Camera frameCamera,
+            LayerMask frameLayer,
+            bool enableRenderer,
+            int gasRaymarchSteps,
+            float gasBrightness,
+            float gasOpacity,
+            float gasDustStrength,
+            float gasDiskRadiusMultiplier,
+            float gasDiskThicknessMultiplier)
+        {
+            spaceAnchor = anchor;
+            celestialCamera = frameCamera;
+            celestialLayer = frameLayer;
+            enabled = enableRenderer;
+            raymarchSteps = Mathf.Clamp(gasRaymarchSteps, 8, 96);
+            brightness = Mathf.Max(0.0f, gasBrightness);
+            opacity = Mathf.Clamp(gasOpacity, 0.0f, 4.0f);
+            dustStrength = Mathf.Clamp(gasDustStrength, 0.0f, 2.0f);
+            diskRadiusMultiplier = Mathf.Clamp(
+                gasDiskRadiusMultiplier,
+                0.5f,
+                2.0f);
+            diskThicknessMultiplier = Mathf.Clamp(
+                gasDiskThicknessMultiplier,
+                0.5f,
+                3.0f);
+        }
+
+        public void Tick()
+        {
+            if (!enabled ||
+                spaceAnchor == null ||
+                !spaceAnchor.IsConfigured)
+            {
+                return;
+            }
+
+            var mesh = ResolveFullscreenMesh();
+            var material = ResolveMaterial();
+            var camera = ResolveCamera();
+
+            if (mesh == null || material == null || camera == null)
+                return;
+
+            var galaxy = spaceAnchor.Galaxy;
+            var radiusLightYears = Math.Max(1.0, galaxy.RadiusLightYears);
+            var cameraPosition = ToShapeLocalPosition(
+                spaceAnchor.GalaxyLocalPositionLightYears,
+                galaxy.RotationRadians);
+
+            var shapeCameraPosition = new Vector3(
+                (float)(cameraPosition.x / radiusLightYears),
+                (float)(cameraPosition.y / radiusLightYears),
+                (float)(cameraPosition.z / radiusLightYears));
+
+            // The shader reconstructs its ray from Unity's per-camera GPU
+            // matrices, so it always uses the same actual projection as the
+            // celestial camera. We only provide the fixed galaxy orientation.
+            var worldToGalaxyShape = CreateWorldToGalaxyShapeMatrix(
+                galaxy.RotationRadians);
+
+            var galaxyType = (float)galaxy.Type;
+            var gasDensityFactor = Mathf.Clamp01(
+                0.35f + (float)galaxy.GasDensity * 1.8f);
+            var colors = GetGalaxyColors(galaxy.Type);
+
+            _propertyBlock ??= new MaterialPropertyBlock();
+            _propertyBlock.Clear();
+            _propertyBlock.SetVector(
+                "_CameraGalaxyPosition",
+                shapeCameraPosition);
+            _propertyBlock.SetMatrix(
+                "_WorldToGalaxyShape",
+                worldToGalaxyShape);
+            _propertyBlock.SetFloat("_RaymarchSteps", raymarchSteps);
+            _propertyBlock.SetFloat("_VolumeRadius", VolumeRadiusInGalaxyRadii);
+            _propertyBlock.SetFloat("_GalaxyType", galaxyType);
+            _propertyBlock.SetFloat(
+                "_CoreRadius",
+                Mathf.Clamp(
+                    (float)(galaxy.CoreRadiusLightYears / radiusLightYears),
+                    0.005f,
+                    0.85f));
+            _propertyBlock.SetFloat(
+                "_DiskThickness",
+                Mathf.Clamp(
+                    (float)(galaxy.DiskThicknessLightYears / radiusLightYears) *
+                    diskThicknessMultiplier,
+                    0.0025f,
+                    1.0f));
+            _propertyBlock.SetFloat(
+                "_DiskRadiusMultiplier",
+                diskRadiusMultiplier);
+            _propertyBlock.SetFloat(
+                "_SpiralArmCount",
+                Mathf.Max(1.0f, galaxy.SpiralArmCount));
+            _propertyBlock.SetFloat(
+                "_SpiralArmTightness",
+                Mathf.Max(0.0f, (float)galaxy.SpiralArmTightness));
+            _propertyBlock.SetFloat(
+                "_BarLength",
+                Mathf.Clamp(
+                    (float)(galaxy.BarLengthLightYears / radiusLightYears),
+                    0.005f,
+                    1.5f));
+            _propertyBlock.SetFloat(
+                "_Ellipticity",
+                Mathf.Clamp((float)galaxy.Ellipticity, 0.05f, 2.0f));
+            _propertyBlock.SetFloat(
+                "_RingRadius",
+                Mathf.Clamp(
+                    (float)(galaxy.RingRadiusLightYears / radiusLightYears),
+                    0.005f,
+                    1.5f));
+            _propertyBlock.SetFloat(
+                "_RingWidth",
+                Mathf.Clamp(
+                    (float)(galaxy.RingWidthLightYears / radiusLightYears),
+                    0.0025f,
+                    1.0f));
+            _propertyBlock.SetFloat(
+                "_Irregularity",
+                Mathf.Clamp01((float)galaxy.Irregularity));
+            _propertyBlock.SetFloat("_GasDensity", gasDensityFactor);
+            _propertyBlock.SetFloat("_Brightness", brightness);
+            _propertyBlock.SetFloat("_Opacity", opacity);
+            _propertyBlock.SetFloat("_DustStrength", dustStrength);
+            _propertyBlock.SetFloat(
+                "_Seed",
+                (float)((galaxy.Seed & 0xFFFFUL) / 65535.0));
+            _propertyBlock.SetColor("_CoreColor", colors.Core);
+            _propertyBlock.SetColor("_DiskColor", colors.Disk);
+            _propertyBlock.SetColor("_NebulaColor", colors.Nebula);
+            _propertyBlock.SetColor("_HaloColor", colors.Halo);
+
+            // The vertex shader generates clip-space coordinates itself.
+            // Keeping this mesh near the celestial camera only gives Unity a
+            // sensible bounds centre for draw-call culling.
+            var matrix = Matrix4x4.TRS(
+                camera.transform.position +
+                camera.transform.forward * (camera.nearClipPlane * 2.0f),
+                Quaternion.identity,
+                Vector3.one);
+
+            Graphics.DrawMesh(
+                mesh,
+                matrix,
+                material,
+                ReferenceFrameLayerUtility.GetSingleLayerIndexOrDefault(
+                    celestialLayer),
+                null,
+                0,
+                _propertyBlock,
+                ShadowCastingMode.Off,
+                false,
+                null,
+                LightProbeUsage.Off,
+                null);
+        }
+
+        public void Dispose()
+        {
+            if (_runtimeFullscreenMesh != null)
+                UnityEngine.Object.Destroy(_runtimeFullscreenMesh);
+
+            if (_runtimeMaterial != null)
+                UnityEngine.Object.Destroy(_runtimeMaterial);
+        }
+
+        private Mesh ResolveFullscreenMesh()
+        {
+            if (_runtimeFullscreenMesh != null)
+                return _runtimeFullscreenMesh;
+
+            _runtimeFullscreenMesh = new Mesh
+            {
+                name = "Runtime Galaxy Gas Fullscreen Mesh"
+            };
+
+            _runtimeFullscreenMesh.vertices = new[]
+            {
+                new Vector3(-0.5f, -0.5f, 0.0f),
+                new Vector3( 0.5f, -0.5f, 0.0f),
+                new Vector3( 0.5f,  0.5f, 0.0f),
+                new Vector3(-0.5f,  0.5f, 0.0f)
+            };
+
+            _runtimeFullscreenMesh.uv = new[]
+            {
+                new Vector2(0.0f, 0.0f),
+                new Vector2(1.0f, 0.0f),
+                new Vector2(1.0f, 1.0f),
+                new Vector2(0.0f, 1.0f)
+            };
+
+            _runtimeFullscreenMesh.triangles = new[]
+            {
+                0, 1, 2,
+                0, 2, 3
+            };
+
+            _runtimeFullscreenMesh.bounds = new Bounds(
+                Vector3.zero,
+                Vector3.one * 1_000_000.0f);
+
+            return _runtimeFullscreenMesh;
+        }
+
+        private Material ResolveMaterial()
+        {
+            if (_runtimeMaterial != null)
+                return _runtimeMaterial;
+
+            var shader = Shader.Find(
+                "SpaceEngine/Streaming/Galaxy Gas Volume");
+
+            if (shader == null)
+                return null;
+
+            _runtimeMaterial = new Material(shader)
+            {
+                name = "Runtime Galaxy Gas Volume",
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            return _runtimeMaterial;
+        }
+
+        private Camera ResolveCamera()
+        {
+            return celestialCamera != null
+                ? celestialCamera
+                : Camera.main;
+        }
+
+        private static double3 ToShapeLocalPosition(
+            double3 galaxyLocalPosition,
+            double rotationRadians)
+        {
+            var cosine = Math.Cos(-rotationRadians);
+            var sine = Math.Sin(-rotationRadians);
+
+            return new double3(
+                galaxyLocalPosition.x * cosine -
+                galaxyLocalPosition.z * sine,
+                galaxyLocalPosition.y,
+                galaxyLocalPosition.x * sine +
+                galaxyLocalPosition.z * cosine);
+        }
+
+        private static Matrix4x4 CreateWorldToGalaxyShapeMatrix(
+            double rotationRadians)
+        {
+            var cosine = (float)Math.Cos(-rotationRadians);
+            var sine = (float)Math.Sin(-rotationRadians);
+            var matrix = Matrix4x4.identity;
+
+            // This is exactly the same XZ rotation as
+            // ToShapeLocalPosition above, expressed as a shader matrix.
+            matrix.m00 = cosine;
+            matrix.m02 = -sine;
+            matrix.m20 = sine;
+            matrix.m22 = cosine;
+            return matrix;
+        }
+
+        private static (
+            Color Core,
+            Color Disk,
+            Color Nebula,
+            Color Halo) GetGalaxyColors(GalaxyType galaxyType)
+        {
+            switch (galaxyType)
+            {
+                case GalaxyType.Elliptical:
+                    return (
+                        new Color(1.0f, 0.82f, 0.58f, 1.0f),
+                        new Color(0.92f, 0.80f, 0.63f, 1.0f),
+                        new Color(0.58f, 0.56f, 0.68f, 1.0f),
+                        new Color(0.25f, 0.32f, 0.46f, 1.0f));
+
+                case GalaxyType.Dwarf:
+                case GalaxyType.Irregular:
+                    return (
+                        new Color(1.0f, 0.84f, 0.62f, 1.0f),
+                        new Color(0.48f, 0.61f, 0.92f, 1.0f),
+                        new Color(0.24f, 0.52f, 1.0f, 1.0f),
+                        new Color(0.12f, 0.22f, 0.42f, 1.0f));
+
+                default:
+                    return (
+                        new Color(1.0f, 0.76f, 0.42f, 1.0f),
+                        new Color(0.46f, 0.56f, 0.82f, 1.0f),
+                        new Color(0.20f, 0.46f, 1.0f, 1.0f),
+                        new Color(0.10f, 0.18f, 0.36f, 1.0f));
+            }
+        }
+    }
+
+public sealed class GalaxyStarfieldRenderer
     {
         private const int MaximumInstancesPerDrawCall = 1023;
         private const ulong AggregatePointSalt = 0x47414C5F53544152UL;
@@ -5158,6 +5478,13 @@ internal static class ReferenceFrameLayerUtility
         public readonly LayerMask CelestialLayer;
         public readonly int AggregateStarSampleCount;
         public readonly int MaximumGalaxyProxies;
+        public readonly bool EnableGalaxyGas;
+        public readonly int GalaxyGasRaymarchSteps;
+        public readonly float GalaxyGasBrightness;
+        public readonly float GalaxyGasOpacity;
+        public readonly float GalaxyGasDustStrength;
+        public readonly float GalaxyGasDiskRadiusMultiplier;
+        public readonly float GalaxyGasDiskThicknessMultiplier;
         public readonly int StellarFieldSectorRadius;
         public readonly int StellarFieldVerticalSectorRadius;
         public readonly int MaximumStellarPoints;
@@ -5186,6 +5513,13 @@ internal static class ReferenceFrameLayerUtility
             LayerMask celestialLayer,
             int aggregateStarSampleCount,
             int maximumGalaxyProxies,
+            bool enableGalaxyGas,
+            int galaxyGasRaymarchSteps,
+            float galaxyGasBrightness,
+            float galaxyGasOpacity,
+            float galaxyGasDustStrength,
+            float galaxyGasDiskRadiusMultiplier,
+            float galaxyGasDiskThicknessMultiplier,
             int stellarFieldSectorRadius,
             int stellarFieldVerticalSectorRadius,
             int maximumStellarPoints,
@@ -5213,6 +5547,14 @@ internal static class ReferenceFrameLayerUtility
             CelestialLayer = celestialLayer;
             AggregateStarSampleCount = aggregateStarSampleCount;
             MaximumGalaxyProxies = maximumGalaxyProxies;
+            EnableGalaxyGas = enableGalaxyGas;
+            GalaxyGasRaymarchSteps = galaxyGasRaymarchSteps;
+            GalaxyGasBrightness = galaxyGasBrightness;
+            GalaxyGasOpacity = galaxyGasOpacity;
+            GalaxyGasDustStrength = galaxyGasDustStrength;
+            GalaxyGasDiskRadiusMultiplier = galaxyGasDiskRadiusMultiplier;
+            GalaxyGasDiskThicknessMultiplier =
+                galaxyGasDiskThicknessMultiplier;
             StellarFieldSectorRadius = stellarFieldSectorRadius;
             StellarFieldVerticalSectorRadius = stellarFieldVerticalSectorRadius;
             MaximumStellarPoints = maximumStellarPoints;
@@ -5257,6 +5599,7 @@ internal static class ReferenceFrameLayerUtility
         private readonly GalaxySpaceAnchor _galaxyAnchor = new();
         private readonly SeamlessSpaceAnchor _spaceAnchor;
         private readonly UniverseGalaxyFieldRenderer _universeRenderer = new();
+        private readonly GalaxyGasRenderer _galaxyGasRenderer = new();
         private readonly GalaxyStarfieldRenderer _galaxyRenderer = new();
         private readonly StellarFieldRenderer _stellarRenderer = new();
         private readonly SolarSystemScaledSpaceRenderer _solarRenderer;
@@ -5281,6 +5624,18 @@ internal static class ReferenceFrameLayerUtility
                 settings.CelestialCamera,
                 settings.CelestialLayer,
                 settings.MaximumGalaxyProxies);
+
+            _galaxyGasRenderer.Configure(
+                _spaceAnchor,
+                settings.CelestialCamera,
+                settings.CelestialLayer,
+                settings.EnableGalaxyGas,
+                settings.GalaxyGasRaymarchSteps,
+                settings.GalaxyGasBrightness,
+                settings.GalaxyGasOpacity,
+                settings.GalaxyGasDustStrength,
+                settings.GalaxyGasDiskRadiusMultiplier,
+                settings.GalaxyGasDiskThicknessMultiplier);
 
             _galaxyRenderer.Configure(
                 _spaceAnchor,
@@ -5339,6 +5694,7 @@ internal static class ReferenceFrameLayerUtility
         public void UpdateVisuals(float deltaTime)
         {
             _universeRenderer.Tick();
+            _galaxyGasRenderer.Tick();
             _galaxyRenderer.Tick();
             _stellarRenderer.Tick();
             _solarRenderer.Tick(deltaTime);
@@ -5350,6 +5706,7 @@ internal static class ReferenceFrameLayerUtility
             _solarRenderer.Dispose();
             _stellarRenderer.Dispose();
             _galaxyRenderer.Dispose();
+            _galaxyGasRenderer.Dispose();
             _universeRenderer.Dispose();
         }
     }

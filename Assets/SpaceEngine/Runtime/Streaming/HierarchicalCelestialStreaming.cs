@@ -109,6 +109,50 @@ namespace SpaceEngine.Runtime.Streaming
         [SerializeField, Range(0.0f, 1.0f)]
         private float minimumPlanetAngularDiameterDegrees = 0.004f;
 
+        [Header("Galaxy gas volume")]
+        [Tooltip(
+            "Renders a camera-raymarched galaxy volume behind the real " +
+            "star catalogue. It is visible from inside the active galaxy, " +
+            "including when looking along the galactic disk.")]
+        [SerializeField]
+        private bool enableGalaxyGas = true;
+
+        [Tooltip(
+            "Ray-march quality for the galaxy volume. Higher values improve " +
+            "dust and cloud detail but cost more GPU time.")]
+        [SerializeField, Range(8, 96)]
+        [FormerlySerializedAs("galaxyGasSliceCount")]
+        private int galaxyGasRaymarchSteps = 24;
+
+        [Tooltip(
+            "Emission intensity of unresolved stellar light and diffuse gas.")]
+        [SerializeField, Range(0.0f, 8.0f)]
+        private float galaxyGasBrightness = 1.0f;
+
+        [Tooltip(
+            "Optical density of the volumetric disk. Increase this for a " +
+            "stronger Milky Way-like band while flying within the galaxy.")]
+        [SerializeField, Range(0.0f, 4.0f)]
+        private float galaxyGasOpacity = 1.25f;
+
+        [Tooltip(
+            "Strength of procedural dust lanes. Dust darkens only dense gas " +
+            "regions; it never draws opaque black planes in front of space.")]
+        [SerializeField, Range(0.0f, 2.0f)]
+        private float galaxyGasDustStrength = 0.9f;
+
+        [Tooltip(
+            "Expands or contracts the visible gas disk relative to the " +
+            "generated galaxy radius.")]
+        [SerializeField, Range(0.5f, 2.0f)]
+        private float galaxyGasDiskRadiusMultiplier = 1.0f;
+
+        [Tooltip(
+            "Expands or contracts the volume thickness relative to the " +
+            "generated galaxy disk thickness.")]
+        [SerializeField, Range(0.5f, 3.0f)]
+        private float galaxyGasDiskThicknessMultiplier = 1.0f;
+
         [Header("Scaled-space presentation scale")]
         [SerializeField, Min(1.0f)]
         private double scaledSpaceMetersPerUnityUnit = 10_000_000.0;
@@ -256,6 +300,30 @@ namespace SpaceEngine.Runtime.Streaming
             minimumPlanetAngularDiameterDegrees = Mathf.Max(
                 0.0f,
                 minimumPlanetAngularDiameterDegrees);
+            galaxyGasRaymarchSteps = Mathf.Clamp(
+                galaxyGasRaymarchSteps,
+                8,
+                96);
+            galaxyGasBrightness = Mathf.Clamp(
+                galaxyGasBrightness,
+                0.0f,
+                8.0f);
+            galaxyGasOpacity = Mathf.Clamp(
+                galaxyGasOpacity,
+                0.0f,
+                4.0f);
+            galaxyGasDustStrength = Mathf.Clamp(
+                galaxyGasDustStrength,
+                0.0f,
+                2.0f);
+            galaxyGasDiskRadiusMultiplier = Mathf.Clamp(
+                galaxyGasDiskRadiusMultiplier,
+                0.5f,
+                2.0f);
+            galaxyGasDiskThicknessMultiplier = Mathf.Clamp(
+                galaxyGasDiskThicknessMultiplier,
+                0.5f,
+                3.0f);
             scaledSpaceMetersPerUnityUnit = Math.Max(
                 1.0,
                 scaledSpaceMetersPerUnityUnit);
@@ -433,6 +501,13 @@ namespace SpaceEngine.Runtime.Streaming
                 celestialFrameLayer,
                 settings.AggregateStarSampleCount,
                 settings.MaximumGalaxyProxies,
+                enableGalaxyGas,
+                galaxyGasRaymarchSteps,
+                galaxyGasBrightness,
+                galaxyGasOpacity,
+                galaxyGasDustStrength,
+                galaxyGasDiskRadiusMultiplier,
+                galaxyGasDiskThicknessMultiplier,
                 settings.StellarFieldSectorRadius,
                 settings.StellarFieldVerticalSectorRadius,
                 settings.MaximumStellarPoints,
