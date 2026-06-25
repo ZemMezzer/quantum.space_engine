@@ -12,7 +12,7 @@ Shader "SpaceEngine/Streaming/Star Point"
         Tags
         {
             "RenderType" = "Transparent"
-            "Queue" = "Transparent"
+            "Queue" = "Background"
             "RenderPipeline" = "UniversalPipeline"
         }
 
