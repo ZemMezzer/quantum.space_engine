@@ -108,6 +108,92 @@ namespace SpaceEngine.Runtime.Streaming
         [SerializeField, Range(0.0f, 1.0f)]
         private float minimumPlanetAngularDiameterDegrees = 0.004f;
 
+        [Header("Distant galaxy point field")]
+        [Tooltip(
+            "Horizontal universe-sector radius used only for the cheapest " +
+            "galaxy LOD. Every discovered remote galaxy is rendered as one " +
+            "star-sized pixel until its real fog and starfield are preloaded.")]
+        [SerializeField, Range(1, 8)]
+        private int distantGalaxyPointHorizontalSectorRadius = 3;
+
+        [Tooltip(
+            "Vertical universe-sector radius used by the distant galaxy " +
+            "point field. Increase this together with the horizontal radius " +
+            "when the space outside a galaxy looks too empty.")]
+        [SerializeField, Range(0, 4)]
+        private int distantGalaxyPointVerticalSectorRadius = 2;
+
+        [Tooltip(
+            "Maximum number of cheap distant galaxy pixels kept in view. " +
+            "This affects only LOD 0 points, not the number of foggy galaxies " +
+            "that can be preloaded at once.")]
+        [SerializeField, Range(64, 4_096)]
+        private int maximumDistantGalaxyPoints = 2_048;
+
+        [Header("External galaxy preload")]
+        [Tooltip(
+            "Pixel diameter of a distant galaxy marker. Remote galaxies stay " +
+            "star-sized until their generated starfield is preloaded.")]
+        [SerializeField, Min(0.25f)]
+        [FormerlySerializedAs("galaxyDistantMarkerDiameterPixels")]
+        private float galaxyLod0MinimumPointDiameterPixels = 3.0f;
+
+        // Retained only to preserve existing serialized scenes. Distant
+        // galaxies now stay one constant star-sized point until a real
+        // preloaded external visual takes over.
+        [SerializeField, HideInInspector]
+        [FormerlySerializedAs("galaxyNearMarkerDiameterPixels")]
+        private float galaxyLod0NearPointDiameterPixels = 0.35f;
+
+        [SerializeField, HideInInspector]
+        [FormerlySerializedAs("galaxyMarkerShrinkCompleteAtDiameterPixels")]
+        private float galaxyLod0ShrinkCompleteDiameterPixels = 4.5f;
+
+        [Tooltip(
+            "Projected diameter where an external galaxy stops being only a " +
+            "point and starts loading its real diffuse fog plus starfield. " +
+            "Increase this to begin the transition farther away.")]
+        [SerializeField, Min(0.25f)]
+        private float galaxyLod1FadeInStartDiameterPixels = 6.0f;
+
+        [Tooltip(
+            "Projected diameter where the preloaded external galaxy fog and " +
+            "starfield reach full brightness.")]
+        [SerializeField, Min(0.25f)]
+        private float galaxyLod1FullyVisibleDiameterPixels = 16.0f;
+
+        [Tooltip(
+            "Legacy marker-handoff setting. A marker now fades only after its " +
+            "specific galaxy is genuinely preloaded, never by size alone.")]
+        [SerializeField, Min(0.25f)]
+        private float galaxyLod0HideAfterLod1DiameterPixels = 16.0f;
+
+        [Tooltip(
+            "How many nearby external galaxies may keep diffuse fog and their " +
+            "generated starfields loaded simultaneously. Farther galaxies " +
+            "remain star-sized points.")]
+        [SerializeField, Range(1, 16)]
+        private int maximumLoadedExternalGalaxies = 8;
+
+        [Tooltip(
+            "Maximum deterministic star samples used by each preloaded " +
+            "external galaxy. The renderer draws fewer while it is tiny.")]
+        [SerializeField, Range(256, 8_192)]
+        private int externalGalaxyStarfieldSampleCount = 2_048;
+
+        [Tooltip(
+            "On-screen size of a star point inside a preloaded external " +
+            "galaxy, in pixels.")]
+        [SerializeField, Range(0.25f, 3.0f)]
+        private float externalGalaxyStarPointDiameterPixels = 1.0f;
+
+        [Tooltip(
+            "Distance from another galaxy centre, in its generated radii, " +
+            "where the renderer changes the active galaxy context. The " +
+            "full local gas and stellar streaming then take over.")]
+        [SerializeField, Min(1.0f)]
+        private float galaxyActivationDistanceInRadii = 1.20f;
+
         [Header("Galaxy gas volume")]
         [Tooltip(
             "Renders a camera-raymarched galaxy volume behind the real " +
@@ -360,6 +446,55 @@ namespace SpaceEngine.Runtime.Streaming
             minimumPlanetAngularDiameterDegrees = Mathf.Max(
                 0.0f,
                 minimumPlanetAngularDiameterDegrees);
+            distantGalaxyPointHorizontalSectorRadius = Mathf.Clamp(
+                distantGalaxyPointHorizontalSectorRadius,
+                1,
+                8);
+            distantGalaxyPointVerticalSectorRadius = Mathf.Clamp(
+                distantGalaxyPointVerticalSectorRadius,
+                0,
+                4);
+            maximumDistantGalaxyPoints = Mathf.Clamp(
+                maximumDistantGalaxyPoints,
+                64,
+                4_096);
+            galaxyLod0MinimumPointDiameterPixels = Mathf.Max(
+                0.25f,
+                galaxyLod0MinimumPointDiameterPixels);
+            galaxyLod0NearPointDiameterPixels = Mathf.Clamp(
+                galaxyLod0NearPointDiameterPixels,
+                0.05f,
+                galaxyLod0MinimumPointDiameterPixels);
+            galaxyLod0ShrinkCompleteDiameterPixels = Mathf.Max(
+                0.25f,
+                galaxyLod0ShrinkCompleteDiameterPixels);
+            galaxyLod1FadeInStartDiameterPixels = Mathf.Max(
+                0.25f,
+                galaxyLod1FadeInStartDiameterPixels);
+            galaxyLod1FullyVisibleDiameterPixels = Mathf.Max(
+                galaxyLod1FadeInStartDiameterPixels,
+                galaxyLod1FullyVisibleDiameterPixels);
+            galaxyLod0HideAfterLod1DiameterPixels = Mathf.Max(
+                galaxyLod1FullyVisibleDiameterPixels,
+                galaxyLod0HideAfterLod1DiameterPixels);
+            galaxyLod0ShrinkCompleteDiameterPixels = Mathf.Min(
+                galaxyLod0ShrinkCompleteDiameterPixels,
+                galaxyLod0HideAfterLod1DiameterPixels);
+            maximumLoadedExternalGalaxies = Mathf.Clamp(
+                maximumLoadedExternalGalaxies,
+                1,
+                16);
+            externalGalaxyStarfieldSampleCount = Mathf.Clamp(
+                externalGalaxyStarfieldSampleCount,
+                256,
+                8_192);
+            externalGalaxyStarPointDiameterPixels = Mathf.Clamp(
+                externalGalaxyStarPointDiameterPixels,
+                0.25f,
+                3.0f);
+            galaxyActivationDistanceInRadii = Mathf.Max(
+                1.0f,
+                galaxyActivationDistanceInRadii);
             galaxyGasRaymarchSteps = Mathf.Clamp(
                 galaxyGasRaymarchSteps,
                 8,
@@ -560,7 +695,21 @@ namespace SpaceEngine.Runtime.Streaming
                 celestialFrameCamera,
                 celestialFrameLayer,
                 settings.AggregateStarSampleCount,
-                settings.MaximumGalaxyProxies,
+                Mathf.Max(
+                    settings.MaximumGalaxyProxies,
+                    maximumDistantGalaxyPoints),
+                distantGalaxyPointHorizontalSectorRadius,
+                distantGalaxyPointVerticalSectorRadius,
+                galaxyLod0MinimumPointDiameterPixels,
+                galaxyLod0NearPointDiameterPixels,
+                galaxyLod0ShrinkCompleteDiameterPixels,
+                galaxyLod1FadeInStartDiameterPixels,
+                galaxyLod1FullyVisibleDiameterPixels,
+                galaxyLod0HideAfterLod1DiameterPixels,
+                maximumLoadedExternalGalaxies,
+                externalGalaxyStarfieldSampleCount,
+                externalGalaxyStarPointDiameterPixels,
+                galaxyActivationDistanceInRadii,
                 enableGalaxyGas,
                 galaxyGasRaymarchSteps,
                 galaxyGasBrightness,

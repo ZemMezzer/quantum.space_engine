@@ -654,34 +654,114 @@ internal static class ReferenceFrameLayerUtility
     }
 
 /// <summary>
-    /// Renders real procedurally generated galaxies from nearby universe
-    /// sectors as distant galaxy proxies. Each proxy corresponds to one
-    /// GalaxyLocationData and therefore has the same universe position as the
-    /// full galaxy that can later become active.
+    /// Renders nearby universe galaxies with a dense point-only distant LOD.
+    ///
+    /// LOD 0 draws every discovered remote galaxy as one star-sized pixel,
+    /// keeping intergalactic space populated before any real galaxy visuals
+    /// are needed. Once an external galaxy becomes
+    /// distinguishable, the renderer preloads a diffuse, data-driven fog
+    /// layer and a deterministic point cloud from its real GalaxyData. The
+    /// marker remains until that concrete visual has started to fade in.
     /// </summary>
     public sealed class UniverseGalaxyFieldRenderer
     {
         private const int MaximumInstancesPerDrawCall = 1023;
+
+        private readonly struct GalaxyProxy
+        {
+            public readonly GalaxyLocationData Location;
+
+            public GalaxyProxy(GalaxyLocationData location)
+            {
+                Location = location;
+            }
+        }
+
+        private readonly struct ExternalStarSample
+        {
+            public readonly double3 GalaxyLocalPositionLightYears;
+            public readonly float Brightness;
+
+            public ExternalStarSample(
+                double3 galaxyLocalPositionLightYears,
+                float brightness)
+            {
+                GalaxyLocalPositionLightYears =
+                    galaxyLocalPositionLightYears;
+                Brightness = brightness;
+            }
+        }
+
+        private readonly struct ExternalGalaxyCandidate
+        {
+            public readonly GalaxyProxy Proxy;
+            public readonly float ProjectedDiameterPixels;
+            public readonly float Fade;
+
+            public ExternalGalaxyCandidate(
+                GalaxyProxy proxy,
+                float projectedDiameterPixels,
+                float fade)
+            {
+                Proxy = proxy;
+                ProjectedDiameterPixels = projectedDiameterPixels;
+                Fade = fade;
+            }
+        }
+
+        private sealed class LoadedExternalGalaxy
+        {
+            public readonly GalaxyProxy Proxy;
+            public readonly GalaxyData Data;
+            public readonly List<ExternalStarSample> Samples = new();
+            public Matrix4x4[][] Matrices = Array.Empty<Matrix4x4[]>();
+
+            public LoadedExternalGalaxy(
+                GalaxyProxy proxy,
+                GalaxyData data)
+            {
+                Proxy = proxy;
+                Data = data;
+            }
+        }
+
         private SeamlessSpaceAnchor spaceAnchor;
         private Camera celestialCamera;
         private Mesh proxyMesh;
-        private Material proxyMaterial;
+        private Material markerMaterial;
         private LayerMask celestialLayer = 0;
         private float unityUnitsPerLightYear = 0.000001f;
         private int horizontalSectorRadius = 1;
         private int verticalSectorRadius = 1;
         private bool useCircularFootprint = true;
         private int maximumGalaxyProxies = 512;
-        private float minimumGalaxyPixels = 1.5f;
-        private float maximumGalaxyDiameter = 4f;
+        private float minimumGalaxyMarkerPixels = 3.0f;
+        private float nearGalaxyMarkerPixels = 0.35f;
+        private float markerShrinkCompleteAtGalaxyDiameterPixels = 8.0f;
+        private float galaxyVisualFadeInStartPixels = 0.75f;
+        private float galaxyVisualFullyVisiblePixels = 2.5f;
+        private float markerHideAfterGalaxyVisualPixels = 4.0f;
+        private int maximumLoadedExternalGalaxies = 4;
+        private int externalGalaxyStarfieldSampleCount = 2_048;
+        private float externalGalaxyStarPointDiameterPixels = 1.0f;
         private float brightnessMultiplier = 0.75f;
 
-        private readonly List<GalaxyLocationData> _galaxies = new();
-        private Matrix4x4[][] _matrices = Array.Empty<Matrix4x4[]>();
+        private readonly List<GalaxyProxy> _galaxies = new();
+        private readonly List<ExternalGalaxyCandidate>
+            _externalCandidates = new();
+        private readonly Dictionary<long, LoadedExternalGalaxy>
+            _loadedExternalGalaxies = new();
+        private readonly HashSet<long> _selectedExternalGalaxyIDs = new();
+        private readonly Dictionary<long, float> _selectedExternalGalaxyFades =
+            new();
+        private Matrix4x4[][] _markerMatrices = Array.Empty<Matrix4x4[]>();
 
-        private MaterialPropertyBlock _propertyBlock;
+        private MaterialPropertyBlock _markerPropertyBlock;
+        private MaterialPropertyBlock _externalStarfieldPropertyBlock;
+        private MaterialPropertyBlock _externalGalaxyFogPropertyBlock;
         private Mesh _runtimeProxyMesh;
-        private Material _runtimeProxyMaterial;
+        private Material _runtimeMarkerMaterial;
+        private Material _runtimeExternalGalaxyFogMaterial;
 
         private int3 _lastCenterSector;
         private bool _hasCenterSector;
@@ -690,13 +770,53 @@ internal static class ReferenceFrameLayerUtility
             SeamlessSpaceAnchor anchor,
             Camera frameCamera,
             LayerMask frameLayer,
-            int maximumProxies)
+            int maximumProxies,
+            int distantPointHorizontalSectorRadius,
+            int distantPointVerticalSectorRadius,
+            float distantMarkerPixels,
+            float nearMarkerPixels,
+            float markerShrinkCompletePixels,
+            float visualFadeInStartPixels,
+            float visualFullyVisiblePixels,
+            float markerHideAfterVisualPixels,
+            int loadedExternalGalaxyCount,
+            int externalStarfieldSampleCount,
+            float externalStarPointDiameterPixels)
         {
             var changed =
                 spaceAnchor != anchor ||
                 celestialCamera != frameCamera ||
                 celestialLayer.value != frameLayer.value ||
-                maximumGalaxyProxies != maximumProxies;
+                maximumGalaxyProxies != maximumProxies ||
+                horizontalSectorRadius !=
+                    distantPointHorizontalSectorRadius ||
+                verticalSectorRadius !=
+                    distantPointVerticalSectorRadius ||
+                !Mathf.Approximately(
+                    minimumGalaxyMarkerPixels,
+                    distantMarkerPixels) ||
+                !Mathf.Approximately(
+                    nearGalaxyMarkerPixels,
+                    nearMarkerPixels) ||
+                !Mathf.Approximately(
+                    markerShrinkCompleteAtGalaxyDiameterPixels,
+                    markerShrinkCompletePixels) ||
+                !Mathf.Approximately(
+                    galaxyVisualFadeInStartPixels,
+                    visualFadeInStartPixels) ||
+                !Mathf.Approximately(
+                    galaxyVisualFullyVisiblePixels,
+                    visualFullyVisiblePixels) ||
+                !Mathf.Approximately(
+                    markerHideAfterGalaxyVisualPixels,
+                    markerHideAfterVisualPixels) ||
+                maximumLoadedExternalGalaxies !=
+                    loadedExternalGalaxyCount ||
+                externalGalaxyStarfieldSampleCount !=
+                    externalStarfieldSampleCount ||
+                !Mathf.Approximately(
+                    externalGalaxyStarPointDiameterPixels,
+                    externalStarPointDiameterPixels);
 
             spaceAnchor = anchor;
             celestialCamera = frameCamera;
@@ -705,39 +825,204 @@ internal static class ReferenceFrameLayerUtility
                 maximumProxies,
                 16,
                 4_096);
+            horizontalSectorRadius = Mathf.Clamp(
+                distantPointHorizontalSectorRadius,
+                1,
+                8);
+            verticalSectorRadius = Mathf.Clamp(
+                distantPointVerticalSectorRadius,
+                0,
+                4);
+
+            minimumGalaxyMarkerPixels = Mathf.Max(
+                0.25f,
+                distantMarkerPixels);
+            nearGalaxyMarkerPixels = Mathf.Clamp(
+                nearMarkerPixels,
+                0.05f,
+                minimumGalaxyMarkerPixels);
+            markerShrinkCompleteAtGalaxyDiameterPixels = Mathf.Max(
+                0.25f,
+                markerShrinkCompletePixels);
+            galaxyVisualFadeInStartPixels = Mathf.Max(
+                0.25f,
+                visualFadeInStartPixels);
+            galaxyVisualFullyVisiblePixels = Mathf.Max(
+                galaxyVisualFadeInStartPixels,
+                visualFullyVisiblePixels);
+            markerHideAfterGalaxyVisualPixels = Mathf.Max(
+                galaxyVisualFullyVisiblePixels,
+                markerHideAfterVisualPixels);
+            markerShrinkCompleteAtGalaxyDiameterPixels = Mathf.Min(
+                markerShrinkCompleteAtGalaxyDiameterPixels,
+                markerHideAfterGalaxyVisualPixels);
+            maximumLoadedExternalGalaxies = Mathf.Clamp(
+                loadedExternalGalaxyCount,
+                1,
+                16);
+            externalGalaxyStarfieldSampleCount = Mathf.Clamp(
+                externalStarfieldSampleCount,
+                256,
+                8_192);
+            externalGalaxyStarPointDiameterPixels = Mathf.Clamp(
+                externalStarPointDiameterPixels,
+                0.25f,
+                3.0f);
 
             if (changed)
+            {
+                _loadedExternalGalaxies.Clear();
                 ForceRefresh();
+            }
         }
-
-
 
         public void Tick()
         {
             if (spaceAnchor == null || !spaceAnchor.IsConfigured)
                 return;
 
+            EnsureGalaxyList();
+            RenderGalaxyProxies();
+        }
+
+        /// <summary>
+        /// Finds the nearest rendered-universe galaxy whose generated edge is
+        /// already within the supplied activation multiplier. This powers the
+        /// same kind of physical frame rebase that solar LOD uses for stars:
+        /// the distant proxy is not merely hidden; the traveller changes to
+        /// that galaxy's real streaming context.
+        /// </summary>
+        internal bool TryFindGalaxyForHandoff(
+            double activationDistanceInRadii,
+            out GalaxyLocationData location)
+        {
+            location = default;
+
+            if (spaceAnchor == null || !spaceAnchor.IsConfigured)
+                return false;
+
+            activationDistanceInRadii = Math.Max(
+                1.0,
+                activationDistanceInRadii);
+
+            // Do not depend on the visual proxy cap here. A close galaxy must
+            // remain reachable even if a dense universe sector contains more
+            // distant markers than the configured draw budget.
+            var centreSector = UniverseSectorUtility.GetCoordinates(
+                spaceAnchor.UniversePositionLightYears);
+            var universeID = spaceAnchor.Coordinates.UniverseID;
+            var bestEdgeDistance = double.PositiveInfinity;
+            var found = false;
+
+            var radiusSquared =
+                horizontalSectorRadius * horizontalSectorRadius;
+
+            for (var z = -horizontalSectorRadius;
+                 z <= horizontalSectorRadius;
+                 z++)
+            {
+                for (var y = -verticalSectorRadius;
+                     y <= verticalSectorRadius;
+                     y++)
+                {
+                    for (var x = -horizontalSectorRadius;
+                         x <= horizontalSectorRadius;
+                         x++)
+                    {
+                        if (useCircularFootprint &&
+                            x * x + z * z > radiusSquared)
+                        {
+                            continue;
+                        }
+
+                        var sectorCoordinates = centreSector +
+                                                new int3(x, y, z);
+
+                        if (!GalaxyIDUtility.IsSectorCoordinateInRange(
+                                sectorCoordinates))
+                        {
+                            continue;
+                        }
+
+                        var sector = UniverseSectorGenerator.Generate(
+                            universeID,
+                            sectorCoordinates);
+
+                        for (var index = 0;
+                             index < sector.Galaxies.Length;
+                             index++)
+                        {
+                            var candidate = sector.Galaxies[index];
+
+                            if (candidate.GalaxyID ==
+                                spaceAnchor.Coordinates.GalaxyID)
+                            {
+                                continue;
+                            }
+
+                            var relative =
+                                spaceAnchor
+                                    .GetRelativePositionToGalaxyLightYears(
+                                        candidate);
+                            var centreDistance = math.length(relative);
+                            var activationDistance = Math.Max(
+                                1.0,
+                                candidate.RadiusLightYears *
+                                activationDistanceInRadii);
+
+                            if (centreDistance > activationDistance)
+                                continue;
+
+                            var edgeDistance = Math.Max(
+                                0.0,
+                                centreDistance -
+                                candidate.RadiusLightYears);
+
+                            if (edgeDistance >= bestEdgeDistance)
+                                continue;
+
+                            bestEdgeDistance = edgeDistance;
+                            location = candidate;
+                            found = true;
+                        }
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        private void EnsureGalaxyList()
+        {
             var centerSector = UniverseSectorUtility.GetCoordinates(
                 spaceAnchor.UniversePositionLightYears);
 
-            if (!_hasCenterSector ||
-                !centerSector.Equals(_lastCenterSector))
+            if (_hasCenterSector &&
+                centerSector.Equals(_lastCenterSector))
             {
-                _lastCenterSector = centerSector;
-                _hasCenterSector = true;
-                RebuildGalaxyList(centerSector);
+                return;
             }
 
-            RenderGalaxyProxies();
+            _lastCenterSector = centerSector;
+            _hasCenterSector = true;
+            RebuildGalaxyList(centerSector);
         }
 
         public void Dispose()
         {
+            _externalCandidates.Clear();
+            _loadedExternalGalaxies.Clear();
+            _selectedExternalGalaxyIDs.Clear();
+            _selectedExternalGalaxyFades.Clear();
+
             if (_runtimeProxyMesh != null)
                 UnityEngine.Object.Destroy(_runtimeProxyMesh);
 
-            if (_runtimeProxyMaterial != null)
-                UnityEngine.Object.Destroy(_runtimeProxyMaterial);
+            if (_runtimeMarkerMaterial != null)
+                UnityEngine.Object.Destroy(_runtimeMarkerMaterial);
+
+            if (_runtimeExternalGalaxyFogMaterial != null)
+                UnityEngine.Object.Destroy(_runtimeExternalGalaxyFogMaterial);
         }
 
         public void ForceRefresh()
@@ -749,8 +1034,12 @@ internal static class ReferenceFrameLayerUtility
         {
             _galaxies.Clear();
 
+            var locations = new List<GalaxyLocationData>();
             var radiusSquared =
                 horizontalSectorRadius * horizontalSectorRadius;
+            var universeID = spaceAnchor.Coordinates.UniverseID;
+            var anchorUniversePosition =
+                spaceAnchor.UniversePositionLightYears;
 
             for (var z = -horizontalSectorRadius;
                  z <= horizontalSectorRadius;
@@ -780,38 +1069,45 @@ internal static class ReferenceFrameLayerUtility
                         }
 
                         var sector = UniverseSectorGenerator.Generate(
-                            spaceAnchor.Coordinates.UniverseID,
+                            universeID,
                             sectorCoordinates);
 
-                        for (var i = 0;
-                             i < sector.Galaxies.Length &&
-                             _galaxies.Count < maximumGalaxyProxies;
-                             i++)
+                        for (var i = 0; i < sector.Galaxies.Length; i++)
                         {
-                            var galaxy = sector.Galaxies[i];
+                            var location = sector.Galaxies[i];
 
-                            if (galaxy.GalaxyID ==
+                            if (location.GalaxyID ==
                                 spaceAnchor.Coordinates.GalaxyID)
                             {
                                 continue;
                             }
 
-                            _galaxies.Add(galaxy);
+                            locations.Add(location);
                         }
-
-                        if (_galaxies.Count >= maximumGalaxyProxies)
-                            break;
                     }
-
-                    if (_galaxies.Count >= maximumGalaxyProxies)
-                        break;
                 }
-
-                if (_galaxies.Count >= maximumGalaxyProxies)
-                    break;
             }
 
-            EnsureMatrixStorage(_galaxies.Count, ref _matrices);
+            // The potato LOD is deliberately just a dense field of cheap
+            // star-like points. Sort before applying the draw budget so
+            // close galaxies are retained no matter which sector was visited
+            // first while rebuilding the field.
+            locations.Sort((left, right) =>
+            {
+                var leftOffset =
+                    left.UniversePositionLightYears - anchorUniversePosition;
+                var rightOffset =
+                    right.UniversePositionLightYears - anchorUniversePosition;
+
+                return math.lengthsq(leftOffset).CompareTo(
+                    math.lengthsq(rightOffset));
+            });
+
+            var count = Mathf.Min(maximumGalaxyProxies, locations.Count);
+            for (var i = 0; i < count; i++)
+                _galaxies.Add(new GalaxyProxy(locations[i]));
+
+            EnsureMatrixStorage(_galaxies.Count, ref _markerMatrices);
         }
 
         private void RenderGalaxyProxies()
@@ -820,73 +1116,601 @@ internal static class ReferenceFrameLayerUtility
                 return;
 
             var mesh = ResolveProxyMesh();
-            var material = ResolveProxyMaterial();
+            var marker = ResolveMarkerMaterial();
+            var fog = ResolveExternalGalaxyFogMaterial();
             var camera = ResolveCamera();
 
-            if (mesh == null || material == null || camera == null)
+            if (mesh == null || marker == null || camera == null)
                 return;
 
-            var visibleCount = 0;
-            var cameraRotation = camera.transform.rotation;
-
+            // First determine which nearby galaxies are genuinely preloaded.
+            // This state controls both the external fog/starfield and whether
+            // their far marker may fade. Galaxies outside the loaded budget
+            // remain a point regardless of projected size.
+            _externalCandidates.Clear();
             for (var i = 0; i < _galaxies.Count; i++)
             {
-                var galaxy = _galaxies[i];
+                var proxy = _galaxies[i];
                 var relativeLightYears =
                     spaceAnchor.GetRelativePositionToGalaxyLightYears(
-                        galaxy);
-
+                        proxy.Location);
                 var position = ToUnityPosition(relativeLightYears);
+
+                if (!IsInCameraFrustum(camera, position))
+                    continue;
+
+                var distance = position.magnitude;
+                var physicalDiameter = GetPhysicalGalaxyDiameter(
+                    proxy.Location.RadiusLightYears);
+                var projectedDiameterPixels = GetProjectedDiameterPixels(
+                    camera,
+                    distance,
+                    physicalDiameter);
+
+                var preloadFade = Mathf.InverseLerp(
+                    galaxyVisualFadeInStartPixels,
+                    galaxyVisualFullyVisiblePixels,
+                    projectedDiameterPixels);
+
+                if (preloadFade <= 0.001f)
+                    continue;
+
+                _externalCandidates.Add(
+                    new ExternalGalaxyCandidate(
+                        proxy,
+                        projectedDiameterPixels,
+                        preloadFade));
+            }
+
+            SelectExternalGalaxiesForPreload();
+
+            var markerCount = 0;
+            var cameraRotation = camera.transform.rotation;
+
+            // A remote galaxy is always a star-sized point until it actually
+            // has a loaded external visual. This prevents empty gaps when the
+            // nearby-galaxy budget is occupied by other candidates.
+            for (var i = 0; i < _galaxies.Count; i++)
+            {
+                var proxy = _galaxies[i];
+                var relativeLightYears =
+                    spaceAnchor.GetRelativePositionToGalaxyLightYears(
+                        proxy.Location);
+                var position = ToUnityPosition(relativeLightYears);
+
+                if (!IsInCameraFrustum(camera, position))
+                    continue;
+
+                var distance = position.magnitude;
+                var markerFade = 1.0f;
+
+                if (_selectedExternalGalaxyFades.TryGetValue(
+                        proxy.Location.GalaxyID,
+                        out var externalFade))
+                {
+                    // Keep the point until its real diffuse fog/starfield is
+                    // already present. SmoothStep avoids a visible pop.
+                    markerFade = 1.0f - Mathf.SmoothStep(
+                        0.0f,
+                        1.0f,
+                        externalFade);
+                }
+
+                if (markerFade <= 0.001f)
+                    continue;
+
+                var markerBatch =
+                    markerCount / MaximumInstancesPerDrawCall;
+                var markerIndex =
+                    markerCount % MaximumInstancesPerDrawCall;
+                var markerDiameter = GetPixelDiameter(
+                    camera,
+                    distance,
+                    Mathf.Max(
+                        0.02f,
+                        minimumGalaxyMarkerPixels * markerFade));
+
+                _markerMatrices[markerBatch][markerIndex] =
+                    Matrix4x4.TRS(
+                        position,
+                        cameraRotation,
+                        Vector3.one * markerDiameter);
+
+                markerCount++;
+            }
+
+            DrawMarkers(mesh, marker, markerCount);
+            RenderSelectedExternalGalaxyVisuals(mesh, marker, fog, camera);
+        }
+
+        private void SelectExternalGalaxiesForPreload()
+        {
+            _externalCandidates.Sort(
+                (left, right) => right.ProjectedDiameterPixels.CompareTo(
+                    left.ProjectedDiameterPixels));
+
+            _selectedExternalGalaxyIDs.Clear();
+            _selectedExternalGalaxyFades.Clear();
+
+            var loadedCount = Mathf.Min(
+                maximumLoadedExternalGalaxies,
+                _externalCandidates.Count);
+
+            for (var candidateIndex = 0;
+                 candidateIndex < loadedCount;
+                 candidateIndex++)
+            {
+                var candidate = _externalCandidates[candidateIndex];
+                var galaxyID = candidate.Proxy.Location.GalaxyID;
+                _selectedExternalGalaxyIDs.Add(galaxyID);
+                _selectedExternalGalaxyFades[galaxyID] = candidate.Fade;
+            }
+        }
+
+        private void RenderSelectedExternalGalaxyVisuals(
+            Mesh mesh,
+            Material starMaterial,
+            Material fogMaterial,
+            Camera camera)
+        {
+            if (_selectedExternalGalaxyIDs.Count == 0)
+                return;
+
+            for (var candidateIndex = 0;
+                 candidateIndex < _externalCandidates.Count;
+                 candidateIndex++)
+            {
+                var candidate = _externalCandidates[candidateIndex];
+                var galaxyID = candidate.Proxy.Location.GalaxyID;
+
+                if (!_selectedExternalGalaxyIDs.Contains(galaxyID))
+                    continue;
+
+                var loaded = GetOrCreateLoadedExternalGalaxy(
+                    candidate.Proxy);
+
+                // The diffuse layer is drawn before individual aggregate
+                // stars. It is intentionally a real, data-driven galaxy
+                // visual rather than a separate placeholder shape.
+                if (fogMaterial != null)
+                {
+                    RenderLoadedExternalGalaxyFog(
+                        mesh,
+                        fogMaterial,
+                        camera,
+                        loaded,
+                        candidate);
+                }
+
+                RenderLoadedExternalGalaxy(
+                    mesh,
+                    starMaterial,
+                    camera,
+                    loaded,
+                    candidate);
+            }
+
+            // Keep a small cache so a nearby galaxy does not rebuild samples
+            // every time it briefly crosses the preload threshold.
+            if (_loadedExternalGalaxies.Count <=
+                maximumLoadedExternalGalaxies * 2)
+            {
+                return;
+            }
+
+            var removals = new List<long>();
+            foreach (var entry in _loadedExternalGalaxies)
+            {
+                if (!_selectedExternalGalaxyIDs.Contains(entry.Key))
+                    removals.Add(entry.Key);
+            }
+
+            for (var i = 0; i < removals.Count; i++)
+                _loadedExternalGalaxies.Remove(removals[i]);
+        }
+
+        private LoadedExternalGalaxy GetOrCreateLoadedExternalGalaxy(
+            GalaxyProxy proxy)
+        {
+            if (_loadedExternalGalaxies.TryGetValue(
+                    proxy.Location.GalaxyID,
+                    out var loaded))
+            {
+                return loaded;
+            }
+
+            var galaxy = GalaxyGenerator.Generate(
+                spaceAnchor.Coordinates.UniverseID,
+                proxy.Location.GalaxyID);
+
+            loaded = new LoadedExternalGalaxy(proxy, galaxy);
+            CreateExternalGalaxyStarSamples(
+                galaxy,
+                externalGalaxyStarfieldSampleCount,
+                loaded.Samples);
+            EnsureMatrixStorage(loaded.Samples.Count, ref loaded.Matrices);
+            _loadedExternalGalaxies.Add(proxy.Location.GalaxyID, loaded);
+            return loaded;
+        }
+
+        private void RenderLoadedExternalGalaxyFog(
+            Mesh mesh,
+            Material material,
+            Camera camera,
+            LoadedExternalGalaxy loaded,
+            ExternalGalaxyCandidate candidate)
+        {
+            if (candidate.Fade <= 0.001f)
+                return;
+
+            var galaxy = loaded.Data;
+            var relativeGalaxyCentre =
+                spaceAnchor.GetRelativePositionToGalaxyLightYears(
+                    loaded.Proxy.Location);
+            var position = ToUnityPosition(relativeGalaxyCentre);
+
+            if (!IsInCameraFrustum(camera, position))
+                return;
+
+            var diameter = GetPhysicalGalaxyDiameter(
+                galaxy.RadiusLightYears);
+            var rotation = CreateGalaxyPlaneRotation(
+                galaxy.RotationRadians);
+            var radiusLightYears = Math.Max(1.0, galaxy.RadiusLightYears);
+            var color = GetExternalGalaxyFogColor(galaxy.Type);
+            color *= brightnessMultiplier;
+            color.a = candidate.Fade;
+
+            _externalGalaxyFogPropertyBlock ??=
+                new MaterialPropertyBlock();
+            _externalGalaxyFogPropertyBlock.Clear();
+            _externalGalaxyFogPropertyBlock.SetColor(
+                "_GalaxyColor",
+                color);
+            _externalGalaxyFogPropertyBlock.SetVector(
+                "_GalaxyShape",
+                new Vector4(
+                    (float)galaxy.Type,
+                    Mathf.Max(1.0f, galaxy.SpiralArmCount),
+                    Mathf.Max(0.0f, (float)galaxy.SpiralArmTightness),
+                    1.0f));
+            _externalGalaxyFogPropertyBlock.SetVector(
+                "_GalaxyStructure",
+                new Vector4(
+                    Mathf.Clamp(
+                        (float)(galaxy.CoreRadiusLightYears /
+                                radiusLightYears),
+                        0.025f,
+                        0.85f),
+                    Mathf.Clamp(
+                        (float)(galaxy.BarLengthLightYears /
+                                radiusLightYears),
+                        0.001f,
+                        1.5f),
+                    Mathf.Clamp(
+                        (float)(galaxy.RingRadiusLightYears /
+                                radiusLightYears),
+                        0.005f,
+                        1.5f),
+                    Mathf.Clamp(
+                        (float)(galaxy.RingWidthLightYears /
+                                radiusLightYears),
+                        0.01f,
+                        1.0f)));
+
+            Graphics.DrawMesh(
+                mesh,
+                Matrix4x4.TRS(
+                    position,
+                    rotation,
+                    Vector3.one * diameter),
+                material,
+                ReferenceFrameLayerUtility.GetSingleLayerIndexOrDefault(
+                    celestialLayer),
+                null,
+                0,
+                _externalGalaxyFogPropertyBlock,
+                ShadowCastingMode.Off,
+                false,
+                null,
+                LightProbeUsage.Off,
+                null);
+        }
+
+        private void RenderLoadedExternalGalaxy(
+            Mesh mesh,
+            Material material,
+            Camera camera,
+            LoadedExternalGalaxy loaded,
+            ExternalGalaxyCandidate candidate)
+        {
+            if (loaded.Samples.Count == 0)
+                return;
+
+            var visibleBudget = GetExternalSampleBudget(
+                candidate.ProjectedDiameterPixels,
+                candidate.Fade,
+                loaded.Samples.Count);
+            if (visibleBudget <= 0)
+                return;
+
+            var relativeGalaxyCentre =
+                spaceAnchor.GetRelativePositionToGalaxyLightYears(
+                    loaded.Proxy.Location);
+            var cameraRotation = camera.transform.rotation;
+            var visibleCount = 0;
+            var sampleStride = Mathf.Max(
+                1,
+                loaded.Samples.Count / visibleBudget);
+            var sampleOffset = (int)(loaded.Data.Seed %
+                (ulong)loaded.Samples.Count);
+
+            for (var sampleOrder = 0;
+                 sampleOrder < visibleBudget;
+                 sampleOrder++)
+            {
+                var sampleIndex = (sampleOffset +
+                    sampleOrder * sampleStride) % loaded.Samples.Count;
+                var sample = loaded.Samples[sampleIndex];
+                var rotatedSample = RotateGalaxyLocalPosition(
+                    sample.GalaxyLocalPositionLightYears,
+                    loaded.Data.RotationRadians);
+                var relativeLightYears = relativeGalaxyCentre +
+                                        rotatedSample;
+                var position = ToUnityPosition(relativeLightYears);
+
                 if (!IsInCameraFrustum(camera, position))
                     continue;
 
                 var batchIndex = visibleCount / MaximumInstancesPerDrawCall;
-                var instanceIndex = visibleCount % MaximumInstancesPerDrawCall;
-
-                var diameter = GetGalaxyDiameter(
+                var instanceIndex =
+                    visibleCount % MaximumInstancesPerDrawCall;
+                var diameter = GetPixelDiameter(
                     camera,
                     position.magnitude,
-                    galaxy.RadiusLightYears);
+                    Mathf.Max(
+                        0.15f,
+                        externalGalaxyStarPointDiameterPixels *
+                        sample.Brightness));
 
-                _matrices[batchIndex][instanceIndex] = Matrix4x4.TRS(
-                    position,
-                    cameraRotation,
-                    Vector3.one * diameter);
-
+                loaded.Matrices[batchIndex][instanceIndex] =
+                    Matrix4x4.TRS(
+                        position,
+                        cameraRotation,
+                        Vector3.one * diameter);
                 visibleCount++;
             }
 
             if (visibleCount == 0)
                 return;
 
-            _propertyBlock ??= new MaterialPropertyBlock();
-            _propertyBlock.Clear();
+            _externalStarfieldPropertyBlock ??=
+                new MaterialPropertyBlock();
+            _externalStarfieldPropertyBlock.Clear();
+
+            var color = GetExternalStarfieldColor(loaded.Data.Type) *
+                        (brightnessMultiplier * candidate.Fade);
+            _externalStarfieldPropertyBlock.SetColor("_Color", color);
+            _externalStarfieldPropertyBlock.SetColor("_BaseColor", color);
+            _externalStarfieldPropertyBlock.SetColor(
+                "_EmissionColor",
+                color);
+            _externalStarfieldPropertyBlock.SetFloat(
+                "_Intensity",
+                0.65f);
+            _externalStarfieldPropertyBlock.SetFloat("_Softness", 2.0f);
+
+            DrawInstanced(
+                mesh,
+                material,
+                loaded.Matrices,
+                visibleCount,
+                _externalStarfieldPropertyBlock);
+        }
+
+        private static int GetExternalSampleBudget(
+            float projectedDiameterPixels,
+            float fade,
+            int maximumSampleCount)
+        {
+            var projectedArea = Mathf.PI * 0.25f *
+                                projectedDiameterPixels *
+                                projectedDiameterPixels;
+            var budget = Mathf.CeilToInt(projectedArea * 0.45f * fade);
+            return Mathf.Clamp(budget, 0, maximumSampleCount);
+        }
+
+        private static Quaternion CreateGalaxyPlaneRotation(
+            double rotationRadians)
+        {
+            var sine = (float)Math.Sin(rotationRadians);
+            var cosine = (float)Math.Cos(rotationRadians);
+            var galaxyForward = Vector3.up;
+            var galaxyUp = new Vector3(-sine, 0.0f, -cosine);
+            return Quaternion.LookRotation(galaxyForward, galaxyUp);
+        }
+
+        private static Color GetExternalGalaxyFogColor(GalaxyType type)
+        {
+            switch (type)
+            {
+                case GalaxyType.Elliptical:
+                case GalaxyType.Lenticular:
+                    return new Color(1.0f, 0.72f, 0.42f, 1.0f);
+
+                case GalaxyType.Dwarf:
+                case GalaxyType.Irregular:
+                    return new Color(0.38f, 0.62f, 1.0f, 1.0f);
+
+                case GalaxyType.Ring:
+                    return new Color(0.48f, 0.70f, 1.0f, 1.0f);
+
+                default:
+                    return new Color(0.54f, 0.64f, 1.0f, 1.0f);
+            }
+        }
+
+        private static Color GetExternalStarfieldColor(GalaxyType type)
+        {
+            switch (type)
+            {
+                case GalaxyType.Elliptical:
+                case GalaxyType.Lenticular:
+                    return new Color(1.0f, 0.78f, 0.48f, 1.0f);
+
+                case GalaxyType.Irregular:
+                case GalaxyType.Dwarf:
+                    return new Color(0.38f, 0.66f, 1.0f, 1.0f);
+
+                case GalaxyType.Ring:
+                    return new Color(0.52f, 0.72f, 1.0f, 1.0f);
+
+                default:
+                    return new Color(0.72f, 0.82f, 1.0f, 1.0f);
+            }
+        }
+
+        private static double3 RotateGalaxyLocalPosition(
+            double3 position,
+            double rotationRadians)
+        {
+            var cosine = math.cos(rotationRadians);
+            var sine = math.sin(rotationRadians);
+
+            return new double3(
+                position.x * cosine - position.z * sine,
+                position.y,
+                position.x * sine + position.z * cosine);
+        }
+
+        private static void CreateExternalGalaxyStarSamples(
+            in GalaxyData galaxy,
+            int sampleCount,
+            List<ExternalStarSample> samples)
+        {
+            samples.Clear();
+
+            var random = new QuantumRandom(
+                GalaxyIDUtility.Combine(
+                    galaxy.Seed,
+                    0x4558545F47414CUL));
+            var verticalExtent = GetExternalGalaxyVerticalExtent(galaxy);
+
+            for (var sampleIndex = 0;
+                 sampleIndex < sampleCount;
+                 sampleIndex++)
+            {
+                for (var attempt = 0; attempt < 32; attempt++)
+                {
+                    var x = random.NextDouble(
+                        -galaxy.RadiusLightYears,
+                        galaxy.RadiusLightYears);
+                    var z = random.NextDouble(
+                        -galaxy.RadiusLightYears,
+                        galaxy.RadiusLightYears);
+                    var planarRadius = math.length(new double2(x, z));
+
+                    if (planarRadius > galaxy.RadiusLightYears)
+                        continue;
+
+                    var vertical = random.NextDouble(-1.0, 1.0) +
+                                   random.NextDouble(-1.0, 1.0) +
+                                   random.NextDouble(-1.0, 1.0);
+                    var position = new double3(
+                        x,
+                        vertical * verticalExtent / 3.0,
+                        z);
+                    var density = GalaxyDensityUtility.GetDensity(
+                        galaxy,
+                        position);
+
+                    if (density <= 0.0 || random.NextDouble() > density)
+                        continue;
+
+                    samples.Add(new ExternalStarSample(
+                        position,
+                        (float)random.NextDouble(0.45, 1.15)));
+                    break;
+                }
+            }
+        }
+
+        private static double GetExternalGalaxyVerticalExtent(
+            in GalaxyData galaxy)
+        {
+            switch (galaxy.Type)
+            {
+                case GalaxyType.Elliptical:
+                    return Math.Max(
+                        galaxy.RadiusLightYears * galaxy.Ellipticity,
+                        galaxy.DiskThicknessLightYears);
+
+                case GalaxyType.Dwarf:
+                case GalaxyType.Irregular:
+                    return Math.Max(
+                        galaxy.RadiusLightYears * 0.35,
+                        galaxy.DiskThicknessLightYears);
+
+                default:
+                    return Math.Max(
+                        galaxy.DiskThicknessLightYears * 2.0,
+                        100.0);
+            }
+        }
+
+        private void DrawMarkers(
+            Mesh mesh,
+            Material material,
+            int instanceCount)
+        {
+            if (instanceCount <= 0)
+                return;
+
+            _markerPropertyBlock ??= new MaterialPropertyBlock();
+            _markerPropertyBlock.Clear();
 
             var color = new Color(
                 brightnessMultiplier,
                 brightnessMultiplier * 0.94f,
                 brightnessMultiplier * 0.88f);
 
-            _propertyBlock.SetColor("_Color", color);
-            _propertyBlock.SetColor("_BaseColor", color);
-            _propertyBlock.SetColor("_EmissionColor", color);
+            _markerPropertyBlock.SetColor("_Color", color);
+            _markerPropertyBlock.SetColor("_BaseColor", color);
+            _markerPropertyBlock.SetColor("_EmissionColor", color);
+            _markerPropertyBlock.SetFloat("_Intensity", 0.9f);
+            _markerPropertyBlock.SetFloat("_Softness", 2.0f);
 
+            DrawInstanced(
+                mesh,
+                material,
+                _markerMatrices,
+                instanceCount,
+                _markerPropertyBlock);
+        }
+
+        private void DrawInstanced(
+            Mesh mesh,
+            Material material,
+            Matrix4x4[][] matrices,
+            int instanceCount,
+            MaterialPropertyBlock propertyBlock)
+        {
             var drawn = 0;
             for (var batchIndex = 0;
-                 batchIndex < _matrices.Length && drawn < visibleCount;
+                 batchIndex < matrices.Length && drawn < instanceCount;
                  batchIndex++)
             {
                 var count = Mathf.Min(
                     MaximumInstancesPerDrawCall,
-                    visibleCount - drawn);
+                    instanceCount - drawn);
 
                 Graphics.DrawMeshInstanced(
                     mesh,
                     0,
                     material,
-                    _matrices[batchIndex],
+                    matrices[batchIndex],
                     count,
-                    _propertyBlock,
+                    propertyBlock,
                     ShadowCastingMode.Off,
                     false,
                     ReferenceFrameLayerUtility
@@ -899,28 +1723,37 @@ internal static class ReferenceFrameLayerUtility
             }
         }
 
-        private float GetGalaxyDiameter(
+        private float GetPhysicalGalaxyDiameter(double radiusLightYears)
+        {
+            return Mathf.Max(
+                0.000001f,
+                (float)(radiusLightYears * 2.0 * unityUnitsPerLightYear));
+        }
+
+        private static float GetProjectedDiameterPixels(
             Camera camera,
             float distance,
-            double radiusLightYears)
+            float diameter)
         {
-            var physicalDiameter =
-                (float)(radiusLightYears * 2.0 *
-                        unityUnitsPerLightYear);
+            return diameter / GetPixelDiameter(
+                camera,
+                distance,
+                1.0f);
+        }
 
+        private static float GetPixelDiameter(
+            Camera camera,
+            float distance,
+            float pixels)
+        {
             var halfFovRadians =
                 camera.fieldOfView * Mathf.Deg2Rad * 0.5f;
-
             var unitsPerPixel =
-                2f * Mathf.Max(distance, camera.nearClipPlane) *
+                2.0f * Mathf.Max(distance, camera.nearClipPlane) *
                 Mathf.Tan(halfFovRadians) /
                 Mathf.Max(1, Screen.height);
 
-            var pixelDiameter = unitsPerPixel * minimumGalaxyPixels;
-
-            return Mathf.Min(
-                Mathf.Max(physicalDiameter, pixelDiameter),
-                maximumGalaxyDiameter);
+            return unitsPerPixel * pixels;
         }
 
         private Vector3 ToUnityPosition(double3 relativeLightYears)
@@ -933,10 +1766,9 @@ internal static class ReferenceFrameLayerUtility
 
         private Camera ResolveCamera()
         {
-            if (celestialCamera != null)
-                return celestialCamera;
-
-            return Camera.main;
+            return celestialCamera != null
+                ? celestialCamera
+                : Camera.main;
         }
 
         private Mesh ResolveProxyMesh()
@@ -978,11 +1810,30 @@ internal static class ReferenceFrameLayerUtility
             return _runtimeProxyMesh;
         }
 
-        private Material ResolveProxyMaterial()
+        private Material ResolveExternalGalaxyFogMaterial()
         {
-            var material = proxyMaterial != null
-                ? proxyMaterial
-                : CreateRuntimeProxyMaterialIfNeeded();
+            if (_runtimeExternalGalaxyFogMaterial != null)
+                return _runtimeExternalGalaxyFogMaterial;
+
+            var shader = Shader.Find("SpaceEngine/Streaming/Galaxy Proxy");
+            if (shader == null)
+                return null;
+
+            _runtimeExternalGalaxyFogMaterial = new Material(shader)
+            {
+                name = "Runtime External Galaxy Fog Material",
+                hideFlags = HideFlags.HideAndDontSave,
+                renderQueue = (int)RenderQueue.Background - 20
+            };
+
+            return _runtimeExternalGalaxyFogMaterial;
+        }
+
+        private Material ResolveMarkerMaterial()
+        {
+            var material = markerMaterial != null
+                ? markerMaterial
+                : CreateRuntimeMarkerMaterialIfNeeded();
 
             if (material != null)
                 material.enableInstancing = true;
@@ -990,37 +1841,39 @@ internal static class ReferenceFrameLayerUtility
             return material;
         }
 
-        private Material CreateRuntimeProxyMaterialIfNeeded()
+        private Material CreateRuntimeMarkerMaterialIfNeeded()
         {
-            if (_runtimeProxyMaterial != null)
-                return _runtimeProxyMaterial;
+            if (_runtimeMarkerMaterial != null)
+                return _runtimeMarkerMaterial;
 
             var shader = Shader.Find("SpaceEngine/Streaming/Star Point");
+
             if (shader == null)
                 shader = Shader.Find("Universal Render Pipeline/Unlit");
+
             if (shader == null)
                 shader = Shader.Find("Unlit/Color");
 
             if (shader == null)
                 return null;
 
-            _runtimeProxyMaterial = new Material(shader)
+            _runtimeMarkerMaterial = new Material(shader)
             {
-                name = "Runtime Universe Galaxy Proxy Material",
+                name = "Runtime Universe Galaxy Marker Material",
                 enableInstancing = true,
                 renderQueue = (int)RenderQueue.Background
             };
 
-            if (_runtimeProxyMaterial.HasProperty("_Cull"))
-                _runtimeProxyMaterial.SetFloat("_Cull", 0f);
+            if (_runtimeMarkerMaterial.HasProperty("_Cull"))
+                _runtimeMarkerMaterial.SetFloat("_Cull", 0.0f);
 
-            if (_runtimeProxyMaterial.HasProperty("_Intensity"))
-                _runtimeProxyMaterial.SetFloat("_Intensity", 0.75f);
+            if (_runtimeMarkerMaterial.HasProperty("_Intensity"))
+                _runtimeMarkerMaterial.SetFloat("_Intensity", 0.9f);
 
-            if (_runtimeProxyMaterial.HasProperty("_Softness"))
-                _runtimeProxyMaterial.SetFloat("_Softness", 2.0f);
+            if (_runtimeMarkerMaterial.HasProperty("_Softness"))
+                _runtimeMarkerMaterial.SetFloat("_Softness", 2.0f);
 
-            return _runtimeProxyMaterial;
+            return _runtimeMarkerMaterial;
         }
 
         private static bool IsInCameraFrustum(
@@ -1037,7 +1890,6 @@ internal static class ReferenceFrameLayerUtility
             var halfHeight =
                 local.z * Mathf.Tan(
                     camera.fieldOfView * Mathf.Deg2Rad * 0.5f);
-
             var halfWidth = halfHeight * camera.aspect;
 
             return Mathf.Abs(local.x) <= halfWidth &&
@@ -1059,6 +1911,23 @@ internal static class ReferenceFrameLayerUtility
 
             for (var i = 0; i < requiredBatchCount; i++)
                 matrices[i] = new Matrix4x4[MaximumInstancesPerDrawCall];
+        }
+
+        private static void EnsureVectorStorage(
+            int instanceCount,
+            ref Vector4[][] vectors)
+        {
+            var requiredBatchCount =
+                (instanceCount + MaximumInstancesPerDrawCall - 1) /
+                MaximumInstancesPerDrawCall;
+
+            if (vectors.Length == requiredBatchCount)
+                return;
+
+            vectors = new Vector4[requiredBatchCount][];
+
+            for (var i = 0; i < requiredBatchCount; i++)
+                vectors[i] = new Vector4[MaximumInstancesPerDrawCall];
         }
     }
 
@@ -5028,15 +5897,29 @@ public sealed class GalaxyStarfieldRenderer
             CoordinatesData coordinates,
             double3 galaxyLocalPositionLightYears)
         {
+            Configure(
+                coordinates,
+                GalaxyGenerator.Generate(
+                    coordinates.UniverseID,
+                    coordinates.GalaxyID),
+                galaxyLocalPositionLightYears);
+        }
+
+        /// <summary>
+        /// Configures a galaxy frame from data whose universe position has
+        /// already been resolved by universe streaming. This keeps a physical
+        /// approach to a map galaxy continuous when the anchor crosses from
+        /// the universe frame into that galaxy's local frame.
+        /// </summary>
+        public void Configure(
+            CoordinatesData coordinates,
+            GalaxyData galaxy,
+            double3 galaxyLocalPositionLightYears)
+        {
             _coordinates = coordinates;
-
-            _galaxy = GalaxyGenerator.Generate(
-                coordinates.UniverseID,
-                coordinates.GalaxyID);
-
+            _galaxy = galaxy;
             _galaxyLocalPositionLightYears =
                 galaxyLocalPositionLightYears;
-
             _hasResolvedGalaxy = true;
         }
 
@@ -5224,6 +6107,53 @@ public sealed class GalaxyStarfieldRenderer
         }
 
         /// <summary>
+        /// Changes the active galaxy frame without moving the traveller in
+        /// universe space. It is the universe-scale counterpart of
+        /// RebaseToSolarSystem: an approaching external galaxy becomes the
+        /// real active galaxy, so its gas and stellar streaming render rather
+        /// than leaving the player on a never-ending proxy billboard.
+        /// </summary>
+        internal bool RebaseToGalaxy(in GalaxyLocationData galaxyLocation)
+        {
+            if (!_isConfigured ||
+                galaxyLocation.GalaxyID == _coordinates.GalaxyID)
+            {
+                return false;
+            }
+
+            var universePosition = UniversePositionLightYears;
+            var targetGalaxy = CreateGalaxyAtUniverseLocation(
+                _coordinates.UniverseID,
+                galaxyLocation);
+            var targetGalaxyLocalPosition = universePosition -
+                                            targetGalaxy
+                                                .UniversePositionLightYears;
+
+            // Keep the existing logical solar-system address. Every ID is a
+            // deterministic valid system and its local-frame offset preserves
+            // the traveller's exact universe position during the rebase.
+            var targetCoordinates = new CoordinatesData(
+                _coordinates.UniverseID,
+                galaxyLocation.GalaxyID,
+                _coordinates.SolarSystemID);
+            var targetSystem = SolarSystemLocationGenerator.Generate(
+                targetGalaxy,
+                targetCoordinates.SolarSystemID);
+
+            _coordinates = targetCoordinates;
+            _galaxy = targetGalaxy;
+            _activeSolarSystem = targetSystem;
+            _solarSystemLocalPositionMeters =
+                (targetGalaxyLocalPosition -
+                 targetSystem.GalaxyLocalPositionLightYears) *
+                MetersPerLightYear;
+
+            SynchronizeGalaxyAnchor(forceConfigure: true);
+            ActiveSolarSystemChanged?.Invoke(_coordinates);
+            return true;
+        }
+
+        /// <summary>
         /// Returns the current ship-to-system-barycentre distance in metres.
         /// </summary>
         public double GetDistanceToActiveSolarSystemMeters()
@@ -5256,6 +6186,38 @@ public sealed class GalaxyStarfieldRenderer
         }
 
 
+        private static GalaxyData CreateGalaxyAtUniverseLocation(
+            long universeID,
+            in GalaxyLocationData location)
+        {
+            var generated = GalaxyGenerator.Generate(
+                universeID,
+                location.GalaxyID);
+
+            // Galaxy morphology is seeded solely from the logical address;
+            // only this map-issued physical location needs replacing.
+            return new GalaxyData(
+                generated.UniverseID,
+                generated.GalaxyID,
+                generated.Seed,
+                generated.Type,
+                location.UniversePositionLightYears,
+                generated.RotationRadians,
+                generated.RadiusLightYears,
+                generated.CoreRadiusLightYears,
+                generated.DiskThicknessLightYears,
+                generated.MassKg,
+                generated.BaseSystemDensityPerCubicLightYear,
+                generated.GasDensity,
+                generated.Metallicity,
+                generated.SpiralArmCount,
+                generated.SpiralArmTightness,
+                generated.BarLengthLightYears,
+                generated.Ellipticity,
+                generated.RingRadiusLightYears,
+                generated.RingWidthLightYears,
+                generated.Irregularity);
+        }
 
         private void SynchronizeGalaxyAnchor(bool forceConfigure)
         {
@@ -5268,6 +6230,7 @@ public sealed class GalaxyStarfieldRenderer
             {
                 galaxySpaceAnchor.Configure(
                     _coordinates,
+                    _galaxy,
                     GalaxyLocalPositionLightYears);
 
                 return;
@@ -5275,6 +6238,76 @@ public sealed class GalaxyStarfieldRenderer
 
             galaxySpaceAnchor.SetGalaxyLocalPosition(
                 GalaxyLocalPositionLightYears);
+        }
+    }
+
+/// <summary>
+    /// Performs the real universe-to-galaxy frame handoff. The universe field
+    /// first shows a distant galaxy marker/proxy; once the traveller reaches
+    /// its generated outer radius, the anchor rebases into that galaxy and the
+    /// normal gas, stellar field and solar-system streaming take over.
+    /// </summary>
+    public sealed class UniverseGalaxyStreamingController
+    {
+        private SeamlessSpaceAnchor spaceAnchor;
+        private UniverseGalaxyFieldRenderer universeRenderer;
+        private float proximityCheckIntervalSeconds = 0.15f;
+        private double activationDistanceInRadii = 1.20;
+        private float _nextProximityCheckTime;
+
+        internal void Configure(
+            SeamlessSpaceAnchor anchor,
+            UniverseGalaxyFieldRenderer renderer,
+            double activationDistanceMultiplier)
+        {
+            spaceAnchor = anchor;
+            universeRenderer = renderer;
+            activationDistanceInRadii = Math.Max(
+                1.0,
+                activationDistanceMultiplier);
+            proximityCheckIntervalSeconds = Mathf.Max(
+                0.01f,
+                proximityCheckIntervalSeconds);
+        }
+
+        public void Tick(float unscaledTime)
+        {
+            if (spaceAnchor == null || !spaceAnchor.IsConfigured ||
+                universeRenderer == null)
+            {
+                return;
+            }
+
+            if (unscaledTime < _nextProximityCheckTime)
+                return;
+
+            _nextProximityCheckTime = unscaledTime +
+                                      proximityCheckIntervalSeconds;
+            EvaluateNow();
+        }
+
+        public void EvaluateNow()
+        {
+            if (spaceAnchor == null || !spaceAnchor.IsConfigured ||
+                universeRenderer == null)
+            {
+                return;
+            }
+
+            if (!universeRenderer.TryFindGalaxyForHandoff(
+                    activationDistanceInRadii,
+                    out var galaxyLocation))
+            {
+                return;
+            }
+
+            if (!spaceAnchor.RebaseToGalaxy(galaxyLocation))
+                return;
+
+            // The proxy list belongs to the old universe frame. Force a
+            // rebuild immediately so the now-real active galaxy is excluded
+            // and its full active-galaxy renderers take over cleanly.
+            universeRenderer.ForceRefresh();
         }
     }
 
@@ -5492,6 +6525,18 @@ public sealed class GalaxyStarfieldRenderer
         public readonly LayerMask CelestialLayer;
         public readonly int AggregateStarSampleCount;
         public readonly int MaximumGalaxyProxies;
+        public readonly int UniverseGalaxyHorizontalSectorRadius;
+        public readonly int UniverseGalaxyVerticalSectorRadius;
+        public readonly float GalaxyLod0MinimumPointDiameterPixels;
+        public readonly float GalaxyLod0NearPointDiameterPixels;
+        public readonly float GalaxyLod0ShrinkCompleteDiameterPixels;
+        public readonly float GalaxyLod1FadeInStartDiameterPixels;
+        public readonly float GalaxyLod1FullyVisibleDiameterPixels;
+        public readonly float GalaxyLod0HideAfterLod1DiameterPixels;
+        public readonly int MaximumLoadedExternalGalaxies;
+        public readonly int ExternalGalaxyStarfieldSampleCount;
+        public readonly float ExternalGalaxyStarPointDiameterPixels;
+        public readonly double GalaxyActivationDistanceInRadii;
         public readonly bool EnableGalaxyGas;
         public readonly int GalaxyGasRaymarchSteps;
         public readonly float GalaxyGasBrightness;
@@ -5527,6 +6572,18 @@ public sealed class GalaxyStarfieldRenderer
             LayerMask celestialLayer,
             int aggregateStarSampleCount,
             int maximumGalaxyProxies,
+            int universeGalaxyHorizontalSectorRadius,
+            int universeGalaxyVerticalSectorRadius,
+            float galaxyLod0MinimumPointDiameterPixels,
+            float galaxyLod0NearPointDiameterPixels,
+            float galaxyLod0ShrinkCompleteDiameterPixels,
+            float galaxyLod1FadeInStartDiameterPixels,
+            float galaxyLod1FullyVisibleDiameterPixels,
+            float galaxyLod0HideAfterLod1DiameterPixels,
+            int maximumLoadedExternalGalaxies,
+            int externalGalaxyStarfieldSampleCount,
+            float externalGalaxyStarPointDiameterPixels,
+            double galaxyActivationDistanceInRadii,
             bool enableGalaxyGas,
             int galaxyGasRaymarchSteps,
             float galaxyGasBrightness,
@@ -5561,6 +6618,30 @@ public sealed class GalaxyStarfieldRenderer
             CelestialLayer = celestialLayer;
             AggregateStarSampleCount = aggregateStarSampleCount;
             MaximumGalaxyProxies = maximumGalaxyProxies;
+            UniverseGalaxyHorizontalSectorRadius =
+                universeGalaxyHorizontalSectorRadius;
+            UniverseGalaxyVerticalSectorRadius =
+                universeGalaxyVerticalSectorRadius;
+            GalaxyLod0MinimumPointDiameterPixels =
+                galaxyLod0MinimumPointDiameterPixels;
+            GalaxyLod0NearPointDiameterPixels =
+                galaxyLod0NearPointDiameterPixels;
+            GalaxyLod0ShrinkCompleteDiameterPixels =
+                galaxyLod0ShrinkCompleteDiameterPixels;
+            GalaxyLod1FadeInStartDiameterPixels =
+                galaxyLod1FadeInStartDiameterPixels;
+            GalaxyLod1FullyVisibleDiameterPixels =
+                galaxyLod1FullyVisibleDiameterPixels;
+            GalaxyLod0HideAfterLod1DiameterPixels =
+                galaxyLod0HideAfterLod1DiameterPixels;
+            MaximumLoadedExternalGalaxies =
+                maximumLoadedExternalGalaxies;
+            ExternalGalaxyStarfieldSampleCount =
+                externalGalaxyStarfieldSampleCount;
+            ExternalGalaxyStarPointDiameterPixels =
+                externalGalaxyStarPointDiameterPixels;
+            GalaxyActivationDistanceInRadii =
+                galaxyActivationDistanceInRadii;
             EnableGalaxyGas = enableGalaxyGas;
             GalaxyGasRaymarchSteps = galaxyGasRaymarchSteps;
             GalaxyGasBrightness = galaxyGasBrightness;
@@ -5612,6 +6693,8 @@ public sealed class GalaxyStarfieldRenderer
     {
         private readonly SeamlessSpaceAnchor _spaceAnchor;
         private readonly UniverseGalaxyFieldRenderer _universeRenderer = new();
+        private readonly UniverseGalaxyStreamingController
+            _universeStreamingController = new();
         private readonly GalaxyGasRenderer _galaxyGasRenderer = new();
         private readonly GalaxyStarfieldRenderer _galaxyRenderer = new();
         private readonly StellarFieldRenderer _stellarRenderer = new();
@@ -5640,7 +6723,23 @@ public sealed class GalaxyStarfieldRenderer
                 _spaceAnchor,
                 settings.CelestialCamera,
                 settings.CelestialLayer,
-                settings.MaximumGalaxyProxies);
+                settings.MaximumGalaxyProxies,
+                settings.UniverseGalaxyHorizontalSectorRadius,
+                settings.UniverseGalaxyVerticalSectorRadius,
+                settings.GalaxyLod0MinimumPointDiameterPixels,
+                settings.GalaxyLod0NearPointDiameterPixels,
+                settings.GalaxyLod0ShrinkCompleteDiameterPixels,
+                settings.GalaxyLod1FadeInStartDiameterPixels,
+                settings.GalaxyLod1FullyVisibleDiameterPixels,
+                settings.GalaxyLod0HideAfterLod1DiameterPixels,
+                settings.MaximumLoadedExternalGalaxies,
+                settings.ExternalGalaxyStarfieldSampleCount,
+                settings.ExternalGalaxyStarPointDiameterPixels);
+
+            _universeStreamingController.Configure(
+                _spaceAnchor,
+                _universeRenderer,
+                settings.GalaxyActivationDistanceInRadii);
 
             _galaxyGasRenderer.Configure(
                 _spaceAnchor,
@@ -5705,6 +6804,10 @@ public sealed class GalaxyStarfieldRenderer
 
         public void UpdateStreaming(float unscaledTime)
         {
+            // Galaxy context must change before solar-system streaming runs,
+            // otherwise the latter would evaluate one frame against the old
+            // galaxy after crossing a real galaxy boundary.
+            _universeStreamingController.Tick(unscaledTime);
             _streamingController.Tick(unscaledTime);
         }
 
@@ -5719,6 +6822,7 @@ public sealed class GalaxyStarfieldRenderer
 
         public void EvaluateNow()
         {
+            _universeStreamingController.EvaluateNow();
             _streamingController.EvaluateNow();
             _solarRenderer.RefreshNow();
         }
