@@ -3,19 +3,18 @@ using System;
 namespace SpaceEngine.Runtime.Data
 {
     /// <summary>
-    /// Request for a celestial body inside an existing solar system.
-    /// The requested body may resolve to a planet, moon, asteroid,
-    /// station, or may not exist.
+    /// Request for a celestial body inside an addressable solar system.
+    /// Unlike a system, a particular body identifier can be absent.
     /// </summary>
     public readonly struct CelestialBodyCoordinatesData :
         IEquatable<CelestialBodyCoordinatesData>
     {
         public readonly CoordinatesData SolarSystemCoordinates;
-        public readonly ulong CelestialBodyID;
+        public readonly long CelestialBodyID;
 
         public CelestialBodyCoordinatesData(
             CoordinatesData solarSystemCoordinates,
-            ulong celestialBodyID)
+            long celestialBodyID)
         {
             SolarSystemCoordinates = solarSystemCoordinates;
             CelestialBodyID = celestialBodyID;
@@ -25,25 +24,24 @@ namespace SpaceEngine.Runtime.Data
         {
             return CoordinatesData.Combine(
                 SolarSystemCoordinates.GetSolarSystemSeed(),
-                CelestialBodyID);
+                CoordinatesData.ToUnsigned(CelestialBodyID));
         }
 
         public bool Equals(CelestialBodyCoordinatesData other)
         {
-            return SolarSystemCoordinates == other.SolarSystemCoordinates
-                   && CelestialBodyID == other.CelestialBodyID;
+            return SolarSystemCoordinates == other.SolarSystemCoordinates &&
+                   CelestialBodyID == other.CelestialBodyID;
         }
 
         public override bool Equals(object obj)
         {
-            return obj is CelestialBodyCoordinatesData other
-                   && Equals(other);
+            return obj is CelestialBodyCoordinatesData other &&
+                   Equals(other);
         }
 
         public override int GetHashCode()
         {
             var hash = GetCelestialBodySeed();
-
             return unchecked((int)(hash ^ (hash >> 32)));
         }
 

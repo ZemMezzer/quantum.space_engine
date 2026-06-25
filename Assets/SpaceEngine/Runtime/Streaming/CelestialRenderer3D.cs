@@ -1,12 +1,13 @@
 using System;
 using System.Collections;
 using System.Reflection;
+using SpaceEngine.Runtime.Core;
 using UnityEngine;
 using UnityEngine.Serialization;
 
 namespace SpaceEngine.Runtime.Streaming
 {
-    public enum CelestialStreamingQuality
+    public enum CelestialRendererQuality
     {
         Low,
         Balanced,
@@ -14,13 +15,11 @@ namespace SpaceEngine.Runtime.Streaming
     }
 
     /// <summary>
-    /// The only MonoBehaviour in the celestial streaming package.
-    /// It owns one celestial camera and drives all non-MonoBehaviour runtime
-    /// systems: universe proxies, galaxy haze, stellar points, scaled solar
-    /// systems and detailed LOD 2 body renderers.
+    /// Concrete 3D celestial renderer. SpaceEngine drives this renderer;
+    /// this component only holds rendering settings and the camera stack.
     /// </summary>
     [DisallowMultipleComponent]
-    public sealed class HierarchicalCelestialStreaming : MonoBehaviour
+    public class CelestialRenderer3D : CelestialRenderer
     {
         [Header("Required")]
         [SerializeField] private Camera playerCamera;
@@ -47,8 +46,8 @@ namespace SpaceEngine.Runtime.Streaming
         [SerializeField, HideInInspector] private Transform celestialRoot;
 
         [Header("Quality")]
-        [SerializeField] private CelestialStreamingQuality quality =
-            CelestialStreamingQuality.Balanced;
+        [SerializeField] private CelestialRendererQuality quality =
+            CelestialRendererQuality.Balanced;
 
         [Header("Star LOD transitions")]
         [SerializeField, Min(0.25f)]
@@ -163,11 +162,8 @@ namespace SpaceEngine.Runtime.Streaming
         [SerializeField, Min(1.0f)]
         private float minimumStarDiameterInUnityUnits = 8.0f;
 
-        private CelestialStreamingRuntime _runtime;
+        private CelestialRenderRuntime _runtime;
         private bool _hasReportedInvalidLayer;
-
-        public SeamlessSpaceAnchor SpaceAnchor =>
-            _runtime == null ? null : _runtime.SpaceAnchor;
 
         public SeamlessSpaceStreamingController StreamingController =>
             _runtime == null ? null : _runtime.StreamingController;
@@ -178,47 +174,106 @@ namespace SpaceEngine.Runtime.Streaming
         public Camera PlayerCamera => playerCamera;
         public Camera CelestialCamera => celestialFrameCamera;
 
+        public override bool IsReady =>
+            _runtime != null && celestialFrameCamera != null;
+
         private void Reset()
         {
-            Setup();
-        }
-
-        private void Awake()
-        {
-            Setup();
-            _runtime?.Initialize();
+            ValidateSettings();
+            ResolvePlayerCamera();
+            AssignDefaultLayer();
         }
 
         private void OnValidate()
         {
-            if (!Application.isPlaying)
-                Setup();
+            if (Application.isPlaying)
+                return;
+
+            ValidateSettings();
+            ResolvePlayerCamera();
+            AssignDefaultLayer();
+
+            if (playerCamera == null ||
+                !ReferenceFrameLayerUtility.TryGetSingleLayerIndex(
+                    celestialFrameLayer,
+                    out _))
+            {
+                return;
+            }
+
+            EnsureCelestialCamera();
+            EnsureCelestialRoot();
+            SynchronizeCelestialCamera();
+            ConfigureCameraStack();
         }
 
-        private void Update()
+        [ContextMenu("Rebuild 3D celestial renderer")]
+        public void RebuildRenderer()
         {
-            _runtime?.UpdateStreaming(Time.unscaledTime);
+            if (Engine == null || Anchor == null)
+                return;
+
+            RecreateRuntime();
         }
 
-        private void LateUpdate()
+        protected override void OnInitialize()
+        {
+            // The renderer starts before any anchor is observed. Prepare the
+            // camera stack now; the runtime itself is created by
+            // OnAnchorChanged once a CelestialAnchor3D is selected for view.
+            SetupPresentation();
+        }
+
+        protected override void OnTickStreaming(float unscaledTime)
+        {
+            _runtime?.UpdateStreaming(unscaledTime);
+        }
+
+        protected override void OnTickVisuals(
+            float deltaTime,
+            double simulationTimeSeconds)
         {
             SynchronizeCelestialCamera();
-            _runtime?.UpdateVisuals(Time.deltaTime);
+            _runtime?.UpdateVisuals(simulationTimeSeconds);
         }
 
-        private void OnDestroy()
+        protected override void OnAnchorChanged()
+        {
+            RecreateRuntime();
+        }
+
+        protected override void OnEvaluateNow()
+        {
+            _runtime?.EvaluateNow();
+        }
+
+        protected override void OnShutdown()
         {
             _runtime?.Dispose();
             _runtime = null;
         }
 
-        [ContextMenu("Rebuild celestial streaming setup")]
-        public void RebuildSetup()
+        private void SetupRuntime()
         {
-            Setup();
+            if (!SetupPresentation())
+                return;
+
+            if (!(Anchor is CelestialAnchor3D anchor3D))
+            {
+                // A future 2D renderer can accept another anchor type. This
+                // renderer deliberately only consumes the 3D frame backend.
+                return;
+            }
+
+            _runtime ??= new CelestialRenderRuntime(
+                celestialRoot,
+                anchor3D.Backend);
+
+            _runtime.Configure(CreateRuntimeSettings());
+            _runtime.Initialize();
         }
 
-        private void Setup()
+        private bool SetupPresentation()
         {
             ValidateSettings();
             ResolvePlayerCamera();
@@ -230,7 +285,7 @@ namespace SpaceEngine.Runtime.Streaming
                     out _))
             {
                 ReportInvalidLayer();
-                return;
+                return false;
             }
 
             _hasReportedInvalidLayer = false;
@@ -239,9 +294,14 @@ namespace SpaceEngine.Runtime.Streaming
             RemoveLegacyFrameCameras();
             SynchronizeCelestialCamera();
             ConfigureCameraStack();
+            return true;
+        }
 
-            _runtime ??= new CelestialStreamingRuntime(celestialRoot);
-            _runtime.Configure(CreateRuntimeSettings());
+        private void RecreateRuntime()
+        {
+            _runtime?.Dispose();
+            _runtime = null;
+            SetupRuntime();
         }
 
         private void ValidateSettings()
@@ -536,9 +596,9 @@ namespace SpaceEngine.Runtime.Streaming
         {
             return quality switch
             {
-                CelestialStreamingQuality.Low => new QualitySettings(
+                CelestialRendererQuality.Low => new QualitySettings(
                     8_000, 128, 4, 4, 4_000),
-                CelestialStreamingQuality.High => new QualitySettings(
+                CelestialRendererQuality.High => new QualitySettings(
                     30_000, 1_024, 10, 10, 20_000),
                 _ => new QualitySettings(18_000, 512, 7, 7, 10_000)
             };
@@ -551,7 +611,7 @@ namespace SpaceEngine.Runtime.Streaming
 
             _hasReportedInvalidLayer = true;
             Debug.LogError(
-                "HierarchicalCelestialStreaming requires exactly one " +
+                "CelestialRenderer3D requires exactly one " +
                 "Celestial Frame layer.",
                 this);
         }

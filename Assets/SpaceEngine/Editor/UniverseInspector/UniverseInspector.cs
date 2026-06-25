@@ -30,10 +30,10 @@ namespace SpaceEngine.Editor.UniverseInspector
 
         private int _selectedTabIndex;
 
-        private ulong _universeID = 1;
-        private ulong _galaxyID = 1;
-        private ulong _solarSystemID = 1;
-        private ulong _celestialBodyID;
+        private long _universeID = 1;
+        private long _galaxyID = 1;
+        private long _solarSystemID = 1;
+        private long _celestialBodyID;
 
         private CoordinatesData _lastGeneratedCoordinates;
         private CelestialBodyCoordinatesData _lastGeneratedBodyCoordinates;
@@ -110,19 +110,19 @@ namespace SpaceEngine.Editor.UniverseInspector
                 "Coordinates",
                 EditorStyles.boldLabel);
 
-            _universeID = DrawULongField(
+            _universeID = DrawLongField(
                 "Universe ID",
                 _universeID);
 
-            _galaxyID = DrawULongField(
+            _galaxyID = DrawLongField(
                 "Galaxy ID",
                 _galaxyID);
 
-            _solarSystemID = DrawULongField(
+            _solarSystemID = DrawLongField(
                 "Solar System ID",
                 _solarSystemID);
 
-            _celestialBodyID = DrawULongField(
+            _celestialBodyID = DrawLongField(
                 "Celestial Body ID",
                 _celestialBodyID);
 
@@ -215,7 +215,7 @@ namespace SpaceEngine.Editor.UniverseInspector
             Repaint();
         }
 
-        private void SelectGalaxyFromUniverseMap(ulong galaxyID)
+        private void SelectGalaxyFromUniverseMap(long galaxyID)
         {
             _galaxyID = galaxyID;
 
@@ -226,7 +226,7 @@ namespace SpaceEngine.Editor.UniverseInspector
         }
 
         private void SelectSolarSystemFromGalaxyMap(
-            ulong solarSystemID)
+            long solarSystemID)
         {
             _solarSystemID = solarSystemID;
 
@@ -273,15 +273,15 @@ namespace SpaceEngine.Editor.UniverseInspector
             }
         }
 
-        private static ulong DrawULongField(
+        private static long DrawLongField(
             string label,
-            ulong value)
+            long value)
         {
             var text = EditorGUILayout.TextField(
                 label,
                 value.ToString());
 
-            return ulong.TryParse(
+            return long.TryParse(
                 text,
                 out var parsedValue)
                 ? parsedValue

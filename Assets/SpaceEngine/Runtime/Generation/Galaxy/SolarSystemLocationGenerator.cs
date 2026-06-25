@@ -1,17 +1,37 @@
 using SpaceEngine.Runtime.Data.Galaxy;
+using SpaceEngine.Runtime.Generation.Coordinates;
 
 namespace SpaceEngine.Runtime.Generation.Galaxy
 {
     /// <summary>
-    /// Resolves a known existing SolarSystemID to its galaxy-local position.
-    /// The caller supplies IDs obtained from GalaxySectorGenerator, map data,
-    /// scanners, portals or saved coordinates.
+    /// Resolves solar-system locations.
+    ///
+    /// Public logical IDs always map to a valid generated position. The
+    /// packed-slot overload is internal and exists only for nearby-star
+    /// streaming, which already works in physical sector space.
     /// </summary>
     public static class SolarSystemLocationGenerator
     {
+        /// <summary>
+        /// Resolves a gameplay-facing logical SolarSystemID. Every long value
+        /// has a deterministic position inside the addressed galaxy.
+        /// </summary>
         public static SolarSystemLocationData Generate(
             in GalaxyData galaxy,
-            ulong solarSystemID)
+            long solarSystemID)
+        {
+            return LogicalCoordinatesResolver.ResolveSolarSystemLocation(
+                galaxy,
+                solarSystemID);
+        }
+
+        /// <summary>
+        /// Resolves an internal ID emitted by GalaxySectorGenerator. Do not
+        /// use this for CoordinatesData supplied by gameplay code.
+        /// </summary>
+        internal static SolarSystemLocationData GenerateFromStreamingID(
+            in GalaxyData galaxy,
+            long solarSystemID)
         {
             SolarSystemIDUtility.DecodeSolarSystemID(
                 solarSystemID,
@@ -24,31 +44,6 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
                 localSolarSystemIndex);
 
             return candidate.Location;
-        }
-
-        /// <summary>
-        /// Resolves a SolarSystemID only when it was actually emitted by a
-        /// galaxy sector. Use this for spawn points, user input and save-file
-        /// validation. Normal streaming may continue to call Generate after it
-        /// has obtained IDs from a map, scanner or sector generator.
-        /// </summary>
-        public static bool TryGenerateExisting(
-            in GalaxyData galaxy,
-            ulong solarSystemID,
-            out SolarSystemLocationData location)
-        {
-            SolarSystemIDUtility.DecodeSolarSystemID(
-                solarSystemID,
-                out var galaxySectorCoordinates,
-                out var localSolarSystemIndex);
-
-            var candidate = GalaxySectorGenerator.GenerateCandidate(
-                galaxy,
-                galaxySectorCoordinates,
-                localSolarSystemIndex);
-
-            location = candidate.Location;
-            return candidate.IsPresent;
         }
     }
 }

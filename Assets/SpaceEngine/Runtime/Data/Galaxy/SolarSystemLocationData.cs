@@ -8,12 +8,12 @@ namespace SpaceEngine.Runtime.Data.Galaxy
     /// </summary>
     public readonly struct SolarSystemLocationData
     {
-        public readonly ulong SolarSystemID;
+        public readonly long SolarSystemID;
         public readonly double3 GalaxyLocalPositionLightYears;
         public readonly double EstimatedSystemMassSolarMasses;
 
         internal SolarSystemLocationData(
-            ulong solarSystemID,
+            long solarSystemID,
             double3 galaxyLocalPositionLightYears,
             double estimatedSystemMassSolarMasses)
         {

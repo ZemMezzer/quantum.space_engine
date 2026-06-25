@@ -10,7 +10,7 @@ namespace SpaceEngine.Runtime.Generation.Universe.Jobs
     /// </summary>
     public struct UniverseSectorBatchGenerationJob : IJobParallelFor
     {
-        public ulong UniverseID;
+        public long UniverseID;
 
         [ReadOnly]
         public NativeArray<int3> SectorCoordinates;

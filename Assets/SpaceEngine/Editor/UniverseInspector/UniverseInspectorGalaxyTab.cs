@@ -28,7 +28,7 @@ namespace SpaceEngine.Editor.UniverseInspector
         private readonly List<SolarSystemLocationData> _visibleSolarSystems =
             new();
 
-        private Action<ulong> _selectSolarSystem;
+        private Action<long> _selectSolarSystem;
 
         private GalaxyData _galaxy;
         private bool _hasGeneratedGalaxy;
@@ -48,7 +48,7 @@ namespace SpaceEngine.Editor.UniverseInspector
         private bool _shouldFrameGalaxy;
 
         public void SetSolarSystemSelectionCallback(
-            Action<ulong> selectSolarSystem)
+            Action<long> selectSolarSystem)
         {
             _selectSolarSystem = selectSolarSystem;
         }
@@ -745,14 +745,14 @@ namespace SpaceEngine.Editor.UniverseInspector
         private bool TryGetSolarSystemAtScreenPosition(
             Rect canvasRect,
             Vector2 mousePosition,
-            out ulong solarSystemID)
+            out long solarSystemID)
         {
             const float HitRadiusPixels = 12f;
 
             var nearestDistanceSquared =
                 HitRadiusPixels * HitRadiusPixels;
 
-            solarSystemID = 0UL;
+            solarSystemID = 0L;
 
             for (var i = 0; i < _visibleSolarSystems.Count; i++)
             {
@@ -771,7 +771,7 @@ namespace SpaceEngine.Editor.UniverseInspector
                 solarSystemID = _visibleSolarSystems[i].SolarSystemID;
             }
 
-            return solarSystemID != 0UL;
+            return solarSystemID != 0L;
         }
 
         private Vector2 ToScreenPosition(

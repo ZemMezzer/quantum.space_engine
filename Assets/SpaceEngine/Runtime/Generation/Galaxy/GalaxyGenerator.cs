@@ -1,45 +1,49 @@
 using SpaceEngine.Runtime.Data.Galaxy;
 using SpaceEngine.Runtime.Generation.Universe;
+using SpaceEngine.Runtime.Generation.Coordinates;
 using SpaceEngine.Runtime.Utils;
 using Unity.Mathematics;
 
 namespace SpaceEngine.Runtime.Generation.Galaxy
 {
     /// <summary>
-    /// Generates one galaxy from its UniverseID-scoped GalaxyID.
-    /// The ID resolves its hidden universe sector; player-facing coordinates
-    /// never need to expose that sector.
+    /// Generates one galaxy from an UniverseID-scoped logical GalaxyID.
+    /// Hidden universe-sector placement is resolved internally and is never
+    /// encoded into gameplay-facing CoordinatesData.
     /// </summary>
     public static class GalaxyGenerator
     {
         private const double SolarMassKg = 1.98847e30;
 
+        /// <summary>
+        /// Generates a galaxy from a gameplay-facing logical address.
+        /// The address is never decoded as a packed universe-sector value.
+        /// </summary>
         public static GalaxyData Generate(
-            ulong universeID,
-            ulong galaxyID)
+            long universeID,
+            long galaxyID)
         {
-            GalaxyIDUtility.DecodeGalaxyID(
-                galaxyID,
-                out var universeSectorCoordinates,
-                out var localGalaxyIndex);
-
-            var universePosition =
-                UniverseSectorGenerator.GenerateGalaxyUniversePosition(
-                    universeID,
-                    universeSectorCoordinates,
-                    localGalaxyIndex);
-
             return GenerateAtPosition(
                 universeID,
                 galaxyID,
-                universePosition);
+                LogicalCoordinatesResolver.ResolveGalaxyUniversePosition(
+                    universeID,
+                    galaxyID));
         }
 
-        public static GalaxyLocationData GenerateLocation(
-            ulong universeID,
-            ulong galaxyID)
+        /// <summary>
+        /// Creates a universe-map record for a hidden, sector-issued galaxy.
+        /// This path belongs to internal map streaming only.
+        /// </summary>
+        internal static GalaxyLocationData GenerateLocationAtUniversePosition(
+            long universeID,
+            long galaxyID,
+            double3 universePosition)
         {
-            var galaxy = Generate(universeID, galaxyID);
+            var galaxy = GenerateAtPosition(
+                universeID,
+                galaxyID,
+                universePosition);
 
             return new GalaxyLocationData(
                 galaxy.GalaxyID,
@@ -49,8 +53,8 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
         }
 
         private static GalaxyData GenerateAtPosition(
-            ulong universeID,
-            ulong galaxyID,
+            long universeID,
+            long galaxyID,
             double3 universePosition)
         {
             var seed = GalaxyIDUtility.GetGalaxySeed(

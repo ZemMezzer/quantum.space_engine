@@ -39,6 +39,7 @@ namespace SpaceEngine.Editor.UniverseInspector
             _hasGeneratedSystem = true;
 
             _hasSelectedPlanet =
+                _bodyCoordinates.CelestialBodyID >= 0 &&
                 _bodyCoordinates.CelestialBodyID <
                 _solarSystem.PlanetCount;
 

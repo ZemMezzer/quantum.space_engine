@@ -3,9 +3,10 @@ using Unity.Mathematics;
 namespace SpaceEngine.Runtime.Generation.Galaxy
 {
     /// <summary>
-    /// Galaxy IDs are scoped by UniverseID.
-    /// Internally they encode a universe streaming sector and a local slot,
-    /// while player-facing coordinates still contain only the opaque GalaxyID.
+    /// Internal packing utility for universe-map streaming sectors.
+    ///
+    /// Gameplay CoordinatesData never uses this format. A logical GalaxyID is
+    /// resolved by GalaxyGenerator without exposing or decoding these bits.
     /// </summary>
     public static class GalaxyIDUtility
     {
@@ -30,7 +31,11 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
         private const int CoordinateOffset =
             1 << (COORDINATE_BITS - 1);
 
-        public static ulong CreateGalaxyID(
+        /// <summary>
+        /// Creates an internal map-sector identifier. It is only used by the
+        /// universe streamer/editor; it is not required by CoordinatesData.
+        /// </summary>
+        public static long CreateGalaxyID(
             int3 universeSectorCoordinates,
             ushort localGalaxyIndex)
         {
@@ -46,40 +51,42 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
                 ClampSectorCoordinate(universeSectorCoordinates.z) +
                 CoordinateOffset);
 
-            return ((z & CoordinateMask) <<
-                    (COORDINATE_BITS * 2 + LOCAL_INDEX_BITS)) |
-                   ((y & CoordinateMask) <<
-                    (COORDINATE_BITS + LOCAL_INDEX_BITS)) |
-                   ((x & CoordinateMask) << LOCAL_INDEX_BITS) |
-                   ((ulong)localGalaxyIndex & LocalIndexMask);
+            var packed = ((z & CoordinateMask) <<
+                          (COORDINATE_BITS * 2 + LOCAL_INDEX_BITS)) |
+                         ((y & CoordinateMask) <<
+                          (COORDINATE_BITS + LOCAL_INDEX_BITS)) |
+                         ((x & CoordinateMask) << LOCAL_INDEX_BITS) |
+                         ((ulong)localGalaxyIndex & LocalIndexMask);
+
+            return unchecked((long)packed);
         }
 
         public static void DecodeGalaxyID(
-            ulong galaxyID,
+            long galaxyID,
             out int3 universeSectorCoordinates,
             out ushort localGalaxyIndex)
         {
-            localGalaxyIndex = (ushort)(
-                galaxyID & LocalIndexMask);
+            var packed = unchecked((ulong)galaxyID);
+
+            localGalaxyIndex = (ushort)(packed & LocalIndexMask);
 
             var x = (int)(
-                (galaxyID >> LOCAL_INDEX_BITS) &
-                CoordinateMask) - CoordinateOffset;
+                (packed >> LOCAL_INDEX_BITS) & CoordinateMask) -
+                CoordinateOffset;
 
             var y = (int)(
-                (galaxyID >> (COORDINATE_BITS + LOCAL_INDEX_BITS)) &
+                (packed >> (COORDINATE_BITS + LOCAL_INDEX_BITS)) &
                 CoordinateMask) - CoordinateOffset;
 
             var z = (int)(
-                (galaxyID >>
+                (packed >>
                  (COORDINATE_BITS * 2 + LOCAL_INDEX_BITS)) &
                 CoordinateMask) - CoordinateOffset;
 
             universeSectorCoordinates = new int3(x, y, z);
         }
 
-        public static bool IsSectorCoordinateInRange(
-            int3 coordinates)
+        public static bool IsSectorCoordinateInRange(int3 coordinates)
         {
             return IsCoordinateInRange(coordinates.x) &&
                    IsCoordinateInRange(coordinates.y) &&
@@ -87,40 +94,37 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
         }
 
         public static ulong GetGalaxySeed(
-            ulong universeID,
-            ulong galaxyID)
+            long universeID,
+            long galaxyID)
         {
             var universeSeed = Mix(
-                universeID ^ 0xC77A9E4D1B0F5A93UL);
+                unchecked((ulong)universeID) ^
+                0xC77A9E4D1B0F5A93UL);
 
-            return Combine(universeSeed, galaxyID);
+            return Combine(universeSeed, unchecked((ulong)galaxyID));
         }
 
         public static ulong GetUniverseSectorSeed(
-            ulong universeID,
+            long universeID,
             int3 universeSectorCoordinates)
         {
             var seed = Mix(
-                universeID ^ 0xC77A9E4D1B0F5A93UL);
+                unchecked((ulong)universeID) ^
+                0xC77A9E4D1B0F5A93UL);
 
             seed = Combine(seed, ToUnsigned(
                 universeSectorCoordinates.x));
-
             seed = Combine(seed, ToUnsigned(
                 universeSectorCoordinates.y));
-
             seed = Combine(seed, ToUnsigned(
                 universeSectorCoordinates.z));
 
             return seed;
         }
 
-        public static ulong Combine(
-            ulong seed,
-            ulong value)
+        public static ulong Combine(ulong seed, ulong value)
         {
-            return Mix(seed ^ (
-                value + 0x9E3779B97F4A7C15UL));
+            return Mix(seed ^ (value + 0x9E3779B97F4A7C15UL));
         }
 
         public static ulong Mix(ulong value)
@@ -132,7 +136,6 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
                 value ^= value >> 27;
                 value *= 0x94D049BB133111EBUL;
                 value ^= value >> 31;
-
                 return value;
             }
         }

@@ -3,19 +3,22 @@ using System;
 namespace SpaceEngine.Runtime.Data
 {
     /// <summary>
-    /// Logical coordinates of an existing solar system.
-    /// Spatial sectors and physical positions are resolved internally by the engine.
+    /// Logical address of a solar system.
+    ///
+    /// These are gameplay data, not packed streaming-sector identifiers.
+    /// Every value in the signed long range is valid. The engine resolves the
+    /// hidden spatial placement internally when an anchor moves here.
     /// </summary>
     public readonly struct CoordinatesData : IEquatable<CoordinatesData>
     {
-        public readonly ulong UniverseID;
-        public readonly ulong GalaxyID;
-        public readonly ulong SolarSystemID;
+        public readonly long UniverseID;
+        public readonly long GalaxyID;
+        public readonly long SolarSystemID;
 
         public CoordinatesData(
-            ulong universeID,
-            ulong galaxyID,
-            ulong solarSystemID)
+            long universeID,
+            long galaxyID,
+            long solarSystemID)
         {
             UniverseID = universeID;
             GalaxyID = galaxyID;
@@ -24,40 +27,38 @@ namespace SpaceEngine.Runtime.Data
 
         public ulong GetUniverseSeed()
         {
-            return Mix(UniverseID);
+            return Mix(ToUnsigned(UniverseID));
         }
 
         public ulong GetGalaxySeed()
         {
             return Combine(
                 GetUniverseSeed(),
-                GalaxyID);
+                ToUnsigned(GalaxyID));
         }
 
         public ulong GetSolarSystemSeed()
         {
             return Combine(
                 GetGalaxySeed(),
-                SolarSystemID);
+                ToUnsigned(SolarSystemID));
         }
 
         public bool Equals(CoordinatesData other)
         {
-            return UniverseID == other.UniverseID
-                   && GalaxyID == other.GalaxyID
-                   && SolarSystemID == other.SolarSystemID;
+            return UniverseID == other.UniverseID &&
+                   GalaxyID == other.GalaxyID &&
+                   SolarSystemID == other.SolarSystemID;
         }
 
         public override bool Equals(object obj)
         {
-            return obj is CoordinatesData other
-                   && Equals(other);
+            return obj is CoordinatesData other && Equals(other);
         }
 
         public override int GetHashCode()
         {
             var hash = GetSolarSystemSeed();
-
             return unchecked((int)(hash ^ (hash >> 32)));
         }
 
@@ -75,9 +76,7 @@ namespace SpaceEngine.Runtime.Data
             return !left.Equals(right);
         }
 
-        internal static ulong Combine(
-            ulong seed,
-            ulong value)
+        internal static ulong Combine(ulong seed, ulong value)
         {
             unchecked
             {
@@ -94,9 +93,13 @@ namespace SpaceEngine.Runtime.Data
                 value ^= value >> 27;
                 value *= 0x94D049BB133111EBUL;
                 value ^= value >> 31;
-
                 return value;
             }
+        }
+
+        internal static ulong ToUnsigned(long value)
+        {
+            return unchecked((ulong)value);
         }
     }
 }

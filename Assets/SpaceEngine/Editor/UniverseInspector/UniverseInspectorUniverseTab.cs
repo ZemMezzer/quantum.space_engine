@@ -22,7 +22,7 @@ namespace SpaceEngine.Editor.UniverseInspector
         private const float MinimumZoom = 0.00000001f;
         private const float MaximumZoom = 1f;
 
-        private readonly Action<ulong> _selectGalaxy;
+        private readonly Action<long> _selectGalaxy;
         private readonly List<GalaxyLocationData> _galaxies = new();
 
         private int3 _centerSectorCoordinates;
@@ -37,7 +37,7 @@ namespace SpaceEngine.Editor.UniverseInspector
         private bool _isPanning;
         private Vector2 _previousMousePosition;
 
-        public UniverseInspectorUniverseTab(Action<ulong> selectGalaxy)
+        public UniverseInspectorUniverseTab(Action<long> selectGalaxy)
         {
             _selectGalaxy = selectGalaxy;
         }
@@ -164,7 +164,7 @@ namespace SpaceEngine.Editor.UniverseInspector
             HandleInput(canvasRect, coordinates.UniverseID);
         }
 
-        private void ReloadVisibleSectors(ulong universeID)
+        private void ReloadVisibleSectors(long universeID)
         {
             _galaxies.Clear();
 
@@ -191,7 +191,7 @@ namespace SpaceEngine.Editor.UniverseInspector
 
         private void UpdateSectorsForCurrentView(
             Rect canvasRect,
-            ulong universeID)
+            long universeID)
         {
             if (_zoom <= 0.0f)
                 return;
@@ -312,7 +312,7 @@ namespace SpaceEngine.Editor.UniverseInspector
 
         private void DrawGalaxies(
             Rect canvasRect,
-            ulong selectedGalaxyID)
+            long selectedGalaxyID)
         {
             var centerPosition = GetSectorCenterPosition(
                 _centerSectorCoordinates);
@@ -407,7 +407,7 @@ namespace SpaceEngine.Editor.UniverseInspector
 
         private void HandleInput(
             Rect canvasRect,
-            ulong universeID)
+            long universeID)
         {
             var currentEvent = Event.current;
 
@@ -488,14 +488,14 @@ namespace SpaceEngine.Editor.UniverseInspector
         private bool TryGetGalaxyAtScreenPosition(
             Rect canvasRect,
             Vector2 mousePosition,
-            out ulong galaxyID)
+            out long galaxyID)
         {
             const float HitRadiusPixels = 10f;
 
             var nearestDistanceSquared =
                 HitRadiusPixels * HitRadiusPixels;
 
-            galaxyID = 0UL;
+            galaxyID = 0L;
 
             for (var i = 0; i < _galaxies.Count; i++)
             {
@@ -513,7 +513,7 @@ namespace SpaceEngine.Editor.UniverseInspector
                 galaxyID = _galaxies[i].GalaxyID;
             }
 
-            return galaxyID != 0UL;
+            return galaxyID != 0L;
         }
 
         private Vector2 ToScreenPosition(

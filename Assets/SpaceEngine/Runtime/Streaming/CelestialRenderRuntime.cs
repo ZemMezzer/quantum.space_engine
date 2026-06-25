@@ -455,7 +455,7 @@ internal static class ReferenceFrameLayerUtility
     /// One-time bootstrap resolver for a real stellar system near a galaxy's
     /// centre. All returned IDs originate from GalaxySectorGenerator.
     /// </summary>
-    public static class SolarSystemSpawnResolver
+    internal static class SolarSystemSpawnResolver
     {
         public static bool TryFindNearestGeneratedSolarSystem(
             in GalaxyData galaxy,
@@ -564,11 +564,11 @@ internal static class ReferenceFrameLayerUtility
     /// demo/bootstrap code only; gameplay should normally receive IDs from
     /// maps, scanners, portals or saved coordinates.
     /// </summary>
-    public static class UniverseSpawnResolver
+    internal static class UniverseSpawnResolver
     {
         public static bool TryResolveExisting(
-            ulong universeID,
-            ulong galaxyID,
+            long universeID,
+            long galaxyID,
             out GalaxyLocationData location)
         {
             GalaxyIDUtility.DecodeGalaxyID(
@@ -599,7 +599,7 @@ internal static class ReferenceFrameLayerUtility
         /// GalaxyID, because zero decodes to the minimum representable sector.
         /// </summary>
         public static bool TryFindNearestGeneratedGalaxy(
-            ulong universeID,
+            long universeID,
             int maximumSectorRadius,
             out GalaxyLocationData location)
         {
@@ -2870,7 +2870,6 @@ public sealed class GalaxyStarfieldRenderer
         private bool planetLod2LocalSurfaceEnabled = true;
         private double planetLod2SurfaceActivationDistanceInRadii = 24.0;
         private double planetLod2SurfaceDeactivationDistanceInRadii = 32.0;
-        private double simulationTimeScale = 1.0;
 
         private readonly List<StarVisual> _stars = new();
         private readonly List<PlanetVisual> _planets = new();
@@ -2903,10 +2902,10 @@ public sealed class GalaxyStarfieldRenderer
 
         public bool IsNearStarSurface => _isNearStarSurface;
 
-        public ulong LoadedSolarSystemID =>
+        public long LoadedSolarSystemID =>
             spaceAnchor != null && spaceAnchor.IsConfigured
                 ? spaceAnchor.Coordinates.SolarSystemID
-                : 0UL;
+                : 0L;
 
         /// <summary>
         /// Registers a body-specific LOD 2 renderer for the active solar
@@ -3021,7 +3020,7 @@ public sealed class GalaxyStarfieldRenderer
 
 
 
-        public void Tick(float deltaTime)
+        public void Tick(double simulationTimeSeconds)
         {
             if (!_isVisible || spaceAnchor == null ||
                 !spaceAnchor.IsConfigured)
@@ -3029,7 +3028,8 @@ public sealed class GalaxyStarfieldRenderer
                 return;
             }
 
-            _simulationTimeSeconds += deltaTime * simulationTimeScale;
+            // The shared physics implementation owns simulation time.
+            _simulationTimeSeconds = simulationTimeSeconds;
 
             EnsureSystemData();
             UpdateBodyTransforms(immediate: false);
@@ -5099,6 +5099,8 @@ public sealed class GalaxyStarfieldRenderer
         }
         private readonly GalaxySpaceAnchor galaxySpaceAnchor;
 
+        internal GalaxySpaceAnchor GalaxyAnchor => galaxySpaceAnchor;
+
         private CoordinatesData _coordinates;
         private GalaxyData _galaxy;
         private SolarSystemLocationData _activeSolarSystem;
@@ -5192,7 +5194,7 @@ public sealed class GalaxyStarfieldRenderer
         /// Switches the local reference frame to another known stellar system
         /// without moving the ship in galaxy space.
         /// </summary>
-        public void RebaseToSolarSystem(ulong solarSystemID)
+        public void RebaseToSolarSystem(long solarSystemID)
         {
             if (!_isConfigured ||
                 solarSystemID == _coordinates.SolarSystemID)
@@ -5201,9 +5203,10 @@ public sealed class GalaxyStarfieldRenderer
             }
 
             var galaxyPosition = GalaxyLocalPositionLightYears;
-            var nextSystem = SolarSystemLocationGenerator.Generate(
-                _galaxy,
-                solarSystemID);
+            var nextSystem =
+                SolarSystemLocationGenerator.GenerateFromStreamingID(
+                    _galaxy,
+                    solarSystemID);
 
             _coordinates = new CoordinatesData(
                 _coordinates.UniverseID,
@@ -5361,16 +5364,27 @@ public sealed class GalaxyStarfieldRenderer
             if (spaceAnchor == null || !spaceAnchor.IsConfigured)
                 return;
 
+            // A CelestialAnchor addresses a concrete solar system directly.
+            // It must render near that system even when its opaque ID was not
+            // emitted by the density-driven nearby-star catalogue. The field
+            // remains an optimisation for surrounding systems only.
+            var activationDistanceMeters =
+                solarSystemActivationDistanceLightYears *
+                SeamlessSpaceAnchor.MetersPerLightYear;
+
+            if (spaceAnchor.GetDistanceToActiveSolarSystemMeters() <=
+                activationDistanceMeters)
+            {
+                ActivateSolarSystemLod(spaceAnchor.ActiveSolarSystem);
+                return;
+            }
+
             var hasNearest = SolarSystemProximityResolver.TryFindNearest(
                 spaceAnchor.Galaxy,
                 spaceAnchor.GalaxyLocalPositionLightYears,
                 nearestSystemSectorSearchRadius,
                 out var nearestSolarSystem,
                 out var nearestDistanceMeters);
-
-            var activationDistanceMeters =
-                solarSystemActivationDistanceLightYears *
-                SeamlessSpaceAnchor.MetersPerLightYear;
 
             var deactivationDistanceMeters =
                 solarSystemDeactivationDistanceLightYears *
@@ -5591,12 +5605,11 @@ public sealed class GalaxyStarfieldRenderer
     }
 
     /// <summary>
-    /// Owns all non-MonoBehaviour celestial state. HierarchicalCelestialStreaming
-    /// is the only component that calls this object every frame.
+    /// Owns the non-MonoBehaviour 3D render state. CelestialRenderer3D
+    /// drives this object through SpaceEngine's frame loop.
     /// </summary>
-    internal sealed class CelestialStreamingRuntime : IDisposable
+    internal sealed class CelestialRenderRuntime : IDisposable
     {
-        private readonly GalaxySpaceAnchor _galaxyAnchor = new();
         private readonly SeamlessSpaceAnchor _spaceAnchor;
         private readonly UniverseGalaxyFieldRenderer _universeRenderer = new();
         private readonly GalaxyGasRenderer _galaxyGasRenderer = new();
@@ -5611,9 +5624,13 @@ public sealed class GalaxyStarfieldRenderer
             _streamingController;
         public SolarSystemScaledSpaceRenderer SolarRenderer => _solarRenderer;
 
-        public CelestialStreamingRuntime(Transform celestialRoot)
+        public CelestialRenderRuntime(
+            Transform celestialRoot,
+            SeamlessSpaceAnchor anchor)
         {
-            _spaceAnchor = new SeamlessSpaceAnchor(_galaxyAnchor);
+            _spaceAnchor = anchor ??
+                throw new ArgumentNullException(nameof(anchor));
+
             _solarRenderer = new SolarSystemScaledSpaceRenderer(celestialRoot);
         }
 
@@ -5645,7 +5662,7 @@ public sealed class GalaxyStarfieldRenderer
                 settings.StellarFieldSectorRadius * 10.0f);
 
             _stellarRenderer.Configure(
-                _galaxyAnchor,
+                _spaceAnchor.GalaxyAnchor,
                 settings.CelestialCamera,
                 settings.CelestialLayer,
                 settings.StellarFieldSectorRadius,
@@ -5691,13 +5708,19 @@ public sealed class GalaxyStarfieldRenderer
             _streamingController.Tick(unscaledTime);
         }
 
-        public void UpdateVisuals(float deltaTime)
+        public void UpdateVisuals(double simulationTimeSeconds)
         {
             _universeRenderer.Tick();
             _galaxyGasRenderer.Tick();
             _galaxyRenderer.Tick();
             _stellarRenderer.Tick();
-            _solarRenderer.Tick(deltaTime);
+            _solarRenderer.Tick(simulationTimeSeconds);
+        }
+
+        public void EvaluateNow()
+        {
+            _streamingController.EvaluateNow();
+            _solarRenderer.RefreshNow();
         }
 
         public void Dispose()

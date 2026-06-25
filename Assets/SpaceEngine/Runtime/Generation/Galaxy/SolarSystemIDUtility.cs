@@ -3,8 +3,10 @@ using Unity.Mathematics;
 namespace SpaceEngine.Runtime.Generation.Galaxy
 {
     /// <summary>
-    /// Solar-system IDs are scoped by GalaxyID.
-    /// Internally they encode a galaxy streaming sector and local candidate slot.
+    /// Internal packing utility for stellar-field streaming slots.
+    ///
+    /// Gameplay CoordinatesData does not use this encoding. Logical solar
+    /// system IDs are resolved by SolarSystemLocationGenerator internally.
     /// </summary>
     public static class SolarSystemIDUtility
     {
@@ -29,7 +31,7 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
         private const int CoordinateOffset =
             1 << (COORDINATE_BITS - 1);
 
-        public static ulong CreateSolarSystemID(
+        public static long CreateSolarSystemID(
             int3 galaxySectorCoordinates,
             byte localSolarSystemIndex)
         {
@@ -45,41 +47,43 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
                 ClampSectorCoordinate(galaxySectorCoordinates.z) +
                 CoordinateOffset);
 
-            return ((z & CoordinateMask) <<
-                    (COORDINATE_BITS * 2 + LOCAL_INDEX_BITS)) |
-                   ((y & CoordinateMask) <<
-                    (COORDINATE_BITS + LOCAL_INDEX_BITS)) |
-                   ((x & CoordinateMask) << LOCAL_INDEX_BITS) |
-                   ((ulong)localSolarSystemIndex & LocalIndexMask);
+            var packed = ((z & CoordinateMask) <<
+                          (COORDINATE_BITS * 2 + LOCAL_INDEX_BITS)) |
+                         ((y & CoordinateMask) <<
+                          (COORDINATE_BITS + LOCAL_INDEX_BITS)) |
+                         ((x & CoordinateMask) << LOCAL_INDEX_BITS) |
+                         ((ulong)localSolarSystemIndex & LocalIndexMask);
+
+            return unchecked((long)packed);
         }
 
         public static void DecodeSolarSystemID(
-            ulong solarSystemID,
+            long solarSystemID,
             out int3 galaxySectorCoordinates,
             out byte localSolarSystemIndex)
         {
-            localSolarSystemIndex = (byte)(
-                solarSystemID & LocalIndexMask);
+            var packed = unchecked((ulong)solarSystemID);
+
+            localSolarSystemIndex = (byte)(packed & LocalIndexMask);
 
             var x = (int)(
-                (solarSystemID >> LOCAL_INDEX_BITS) &
-                CoordinateMask) - CoordinateOffset;
+                (packed >> LOCAL_INDEX_BITS) & CoordinateMask) -
+                CoordinateOffset;
 
             var y = (int)(
-                (solarSystemID >>
+                (packed >>
                  (COORDINATE_BITS + LOCAL_INDEX_BITS)) &
                 CoordinateMask) - CoordinateOffset;
 
             var z = (int)(
-                (solarSystemID >>
+                (packed >>
                  (COORDINATE_BITS * 2 + LOCAL_INDEX_BITS)) &
                 CoordinateMask) - CoordinateOffset;
 
             galaxySectorCoordinates = new int3(x, y, z);
         }
 
-        public static bool IsSectorCoordinateInRange(
-            int3 coordinates)
+        public static bool IsSectorCoordinateInRange(int3 coordinates)
         {
             return IsCoordinateInRange(coordinates.x) &&
                    IsCoordinateInRange(coordinates.y) &&
@@ -94,17 +98,12 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
                 galaxySeed,
                 0x534543544F525F47UL);
 
-            seed = GalaxyIDUtility.Combine(
-                seed,
-                ToUnsigned(galaxySectorCoordinates.x));
-
-            seed = GalaxyIDUtility.Combine(
-                seed,
-                ToUnsigned(galaxySectorCoordinates.y));
-
-            seed = GalaxyIDUtility.Combine(
-                seed,
-                ToUnsigned(galaxySectorCoordinates.z));
+            seed = GalaxyIDUtility.Combine(seed, ToUnsigned(
+                galaxySectorCoordinates.x));
+            seed = GalaxyIDUtility.Combine(seed, ToUnsigned(
+                galaxySectorCoordinates.y));
+            seed = GalaxyIDUtility.Combine(seed, ToUnsigned(
+                galaxySectorCoordinates.z));
 
             return seed;
         }

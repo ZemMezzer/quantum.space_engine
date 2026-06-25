@@ -15,7 +15,7 @@ namespace SpaceEngine.Runtime.Generation.Universe
         public const double SECTOR_SIZE_LIGHT_YEARS = 10_000_000.0;
 
         public static UniverseSectorData Generate(
-            ulong universeID,
+            long universeID,
             int3 universeSectorCoordinates)
         {
             var seed = GalaxyIDUtility.GetUniverseSectorSeed(
@@ -33,9 +33,17 @@ namespace SpaceEngine.Runtime.Generation.Universe
                     universeSectorCoordinates,
                     (ushort)i);
 
-                galaxies.Add(GalaxyGenerator.GenerateLocation(
-                    universeID,
-                    galaxyID));
+                var universePosition =
+                    GenerateGalaxyUniversePosition(
+                        universeID,
+                        universeSectorCoordinates,
+                        (ushort)i);
+
+                galaxies.Add(
+                    GalaxyGenerator.GenerateLocationAtUniversePosition(
+                        universeID,
+                        galaxyID,
+                        universePosition));
             }
 
             return new UniverseSectorData(
@@ -49,7 +57,7 @@ namespace SpaceEngine.Runtime.Generation.Universe
         /// generating the full sector list.
         /// </summary>
         public static double3 GenerateGalaxyUniversePosition(
-            ulong universeID,
+            long universeID,
             int3 universeSectorCoordinates,
             ushort localGalaxyIndex)
         {

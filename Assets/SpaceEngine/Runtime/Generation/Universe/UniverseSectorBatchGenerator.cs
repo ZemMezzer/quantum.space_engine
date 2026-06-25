@@ -13,7 +13,7 @@ namespace SpaceEngine.Runtime.Generation.Universe
     public static class UniverseSectorBatchGenerator
     {
         public static JobHandle Schedule(
-            ulong universeID,
+            long universeID,
             NativeArray<int3> sectorCoordinates,
             NativeArray<UniverseSectorData> results,
             int batchSize,

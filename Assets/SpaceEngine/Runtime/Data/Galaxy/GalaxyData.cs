@@ -8,8 +8,8 @@ namespace SpaceEngine.Runtime.Data.Galaxy
     /// </summary>
     public readonly struct GalaxyData
     {
-        public readonly ulong UniverseID;
-        public readonly ulong GalaxyID;
+        public readonly long UniverseID;
+        public readonly long GalaxyID;
         public readonly ulong Seed;
         public readonly GalaxyType Type;
 
@@ -39,8 +39,8 @@ namespace SpaceEngine.Runtime.Data.Galaxy
         public readonly double Irregularity;
 
         internal GalaxyData(
-            ulong universeID,
-            ulong galaxyID,
+            long universeID,
+            long galaxyID,
             ulong seed,
             GalaxyType type,
             double3 universePositionLightYears,

@@ -50,9 +50,9 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
         }
 
         /// <summary>
-        /// Reconstructs one slot deterministically. Streaming uses IsPresent;
-        /// direct coordinate resolution assumes the supplied ID was issued
-        /// by a generated sector and therefore points to a present slot.
+        /// Reconstructs one internal streaming slot deterministically.
+        /// Gameplay logical coordinates are resolved separately and never
+        /// need to be issued by this density-driven sector catalogue.
         /// </summary>
         public static GalaxySectorCandidateData GenerateCandidate(
             in GalaxyData galaxy,

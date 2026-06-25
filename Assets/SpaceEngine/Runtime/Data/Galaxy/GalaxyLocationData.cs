@@ -7,13 +7,13 @@ namespace SpaceEngine.Runtime.Data.Galaxy
     /// </summary>
     public readonly struct GalaxyLocationData
     {
-        public readonly ulong GalaxyID;
+        public readonly long GalaxyID;
         public readonly GalaxyType Type;
         public readonly double3 UniversePositionLightYears;
         public readonly double RadiusLightYears;
 
         internal GalaxyLocationData(
-            ulong galaxyID,
+            long galaxyID,
             GalaxyType type,
             double3 universePositionLightYears,
             double radiusLightYears)
