@@ -3660,6 +3660,8 @@ public sealed class GalaxyStarfieldRenderer
             public MeshRenderer CoronaRenderer;
             public Material SurfaceMaterial;
             public Material CoronaMaterial;
+            // The prominence effect is built from intersecting animated gas sheets.
+            // It deliberately does not use solid tube primitives.
             public Material ProminenceMaterial;
             public readonly List<Mesh> ProminenceMeshes = new();
         }
@@ -3728,7 +3730,8 @@ public sealed class GalaxyStarfieldRenderer
         private float minimumPlanetAngularDiameterDegrees = 0.004f;
         private float minimumPlanetDiameterInUnityUnits = 1.0f;
         private float minimumStarDiameterInUnityUnits = 8.0f;
-        private float coronaRadiusMultiplier = 1.12f;
+        // The visible magnetic corona hugs the photosphere.
+        private float coronaRadiusMultiplier = 1.055f;
         private float starLod1LightRadiusMultiplier = 10.0f;
         private float starLod1LightIntensity = 8.0f;
         private float starLod1LightRayStrength = 0.65f;
@@ -4615,8 +4618,9 @@ public sealed class GalaxyStarfieldRenderer
                 minimumStarDiameterInUnityUnits);
 
             coronaRadiusMultiplier = Mathf.Max(
-                1.0f,
+                1.01f,
                 coronaRadiusMultiplier);
+
 
             starLod1LightRadiusMultiplier = Mathf.Clamp(
                 starLod1LightRadiusMultiplier,
@@ -4845,7 +4849,7 @@ public sealed class GalaxyStarfieldRenderer
             coronaObject.transform.localScale =
                 Vector3.one * Mathf.Max(
                     coronaRadiusMultiplier,
-                    1.06f);
+                    1.035f);
 
             coronaObject.AddComponent<MeshFilter>().sharedMesh =
                 ResolveCloseStarSurfaceMesh();
@@ -4956,7 +4960,7 @@ public sealed class GalaxyStarfieldRenderer
                 star,
                 starIndex);
 
-            var prominenceRoot = new GameObject("Prominences")
+            var prominenceRoot = new GameObject("Prominence Gas")
             {
                 layer = layer
             };
@@ -4966,12 +4970,15 @@ public sealed class GalaxyStarfieldRenderer
             prominenceRoot.transform.localRotation = Quaternion.identity;
             prominenceRoot.transform.localScale = Vector3.one;
 
+            // Every prominence is a stack of crossed, softly shaded gas
+            // sheets. The shader breaks the sheets into moving plasma wisps,
+            // so no solid loop, cylinder or tube remains visible.
             var count = 5 + (int)(_loadedSystemSeed % 5UL);
 
             for (var index = 0; index < count; index++)
             {
                 var prominenceObject = new GameObject(
-                    $"Prominence {index}")
+                    $"Prominence Gas {index}")
                 {
                     layer = layer
                 };
@@ -5120,18 +5127,22 @@ public sealed class GalaxyStarfieldRenderer
 
             var material = new Material(shader);
             var colors = GetCloseSurfaceColors(star.Type);
+            var granulationScale = GetGranulationScale(star);
 
             SetColorIfPresent(material, "_BaseColor", colors.Base);
             SetColorIfPresent(material, "_SurfaceColor", colors.Surface);
             SetColorIfPresent(material, "_HotColor", colors.Hot);
             SetColorIfPresent(material, "_SpotColor", colors.Spot);
             SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 0));
-            SetFloatIfPresent(material, "_GranulationScale",
-                GetGranulationScale(star));
-            SetFloatIfPresent(material, "_SpotScale",
-                GetSpotScale(star));
-            SetFloatIfPresent(material, "_FlowSpeed",
-                GetFlowSpeed(star));
+            SetFloatIfPresent(material, "_GranulationScale", granulationScale);
+            SetFloatIfPresent(material, "_DetailScale",
+                granulationScale * 4.6f);
+            SetFloatIfPresent(material, "_SpotScale", GetSpotScale(star));
+            SetFloatIfPresent(material, "_SpotStrength",
+                GetSpotStrength(star));
+            SetFloatIfPresent(material, "_FlowSpeed", GetFlowSpeed(star));
+            SetFloatIfPresent(material, "_Intensity",
+                GetCloseSurfaceIntensity(star));
 
             return material;
         }
@@ -5160,9 +5171,12 @@ public sealed class GalaxyStarfieldRenderer
             SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 1));
             SetFloatIfPresent(material, "_Intensity",
                 GetCoronaIntensity(star));
-            SetFloatIfPresent(material, "_RimPower", 2.2f);
+            SetFloatIfPresent(material, "_RimPower", 2.15f);
             SetFloatIfPresent(material, "_FlowSpeed",
                 GetFlowSpeed(star) * 0.5f);
+            SetFloatIfPresent(material, "_TurbulenceScale",
+                Mathf.Max(10.0f, GetGranulationScale(star) * 0.72f));
+            SetFloatIfPresent(material, "_ShellDisplacement", 0.035f);
 
             return material;
         }
@@ -5190,9 +5204,13 @@ public sealed class GalaxyStarfieldRenderer
             SetColorIfPresent(material, "_BaseColor", colors.Hot);
             SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 2));
             SetFloatIfPresent(material, "_Intensity",
-                GetCoronaIntensity(star) * 1.4f);
-            SetFloatIfPresent(material, "_PulseSpeed",
-                GetFlowSpeed(star) * 2.0f);
+                GetCoronaIntensity(star) * 1.1f);
+            SetFloatIfPresent(material, "_FlowSpeed",
+                GetFlowSpeed(star) * 1.8f);
+            SetFloatIfPresent(material, "_TurbulenceScale",
+                Mathf.Max(8.0f, GetGranulationScale(star) * 0.32f));
+            SetFloatIfPresent(material, "_GasSoftness", 1.65f);
+            SetFloatIfPresent(material, "_FlickerStrength", 0.30f);
 
             return material;
         }
@@ -5292,8 +5310,9 @@ public sealed class GalaxyStarfieldRenderer
             int starIndex,
             int prominenceIndex)
         {
-            const int pathSegments = 28;
-            const int tubeSegments = 6;
+            const int pathSegments = 48;
+            const int sheetCount = 4;
+            const int verticesPerSheet = (pathSegments + 1) * 2;
 
             var direction = GetUnitDirection(
                 systemSeed,
@@ -5304,92 +5323,170 @@ public sealed class GalaxyStarfieldRenderer
                 ? Vector3.right
                 : Vector3.up;
 
-            var tangent = Vector3.Cross(reference, direction).normalized;
-            var bitangent = Vector3.Cross(direction, tangent).normalized;
+            var planeTangent = Vector3.Cross(
+                reference,
+                direction).normalized;
+            var planeNormal = Vector3.Cross(
+                direction,
+                planeTangent).normalized;
+
+            var phase = GetHash01(
+                systemSeed ^
+                ((ulong)(starIndex + 17) * 0x9E3779B97F4A7C15UL) ^
+                ((ulong)(prominenceIndex + 29) * 0xD1B54A32D192ED03UL));
 
             var loopHalfWidth = Mathf.Lerp(
-                0.025f,
-                0.105f,
-                GetSeedValue(starIndex, prominenceIndex * 7 + 3));
+                0.030f,
+                0.110f,
+                GetSeedValue(starIndex, prominenceIndex * 11 + 3));
 
             var loopHeight = Mathf.Lerp(
-                0.045f,
-                0.22f,
-                GetSeedValue(starIndex, prominenceIndex * 7 + 4));
+                0.070f,
+                0.260f,
+                GetSeedValue(starIndex, prominenceIndex * 11 + 4));
 
-            var tubeRadius = Mathf.Lerp(
-                0.0025f,
-                0.0080f,
-                GetSeedValue(starIndex, prominenceIndex * 7 + 5));
+            var baseWidth = Mathf.Lerp(
+                0.0060f,
+                0.0170f,
+                GetSeedValue(starIndex, prominenceIndex * 11 + 5));
 
-            var vertices = new Vector3[
-                (pathSegments + 1) * tubeSegments];
+            var lateralWave = Mathf.Lerp(
+                0.006f,
+                0.026f,
+                GetSeedValue(starIndex, prominenceIndex * 11 + 6));
 
-            var normals = new Vector3[vertices.Length];
-            var uvs = new Vector2[vertices.Length];
+            var path = new Vector3[pathSegments + 1];
+            var pathTangents = new Vector3[pathSegments + 1];
 
             for (var pathIndex = 0;
                  pathIndex <= pathSegments;
                  pathIndex++)
             {
                 var t = pathIndex / (float)pathSegments;
-                var angle = Mathf.PI * t;
+                var arch = Mathf.Sin(Mathf.PI * t);
+                var lateral = Mathf.Cos(Mathf.PI * t) * loopHalfWidth +
+                              Mathf.Sin(Mathf.PI * 2.0f * t +
+                                        phase * Mathf.PI * 2.0f) *
+                              lateralWave * arch;
 
-                var centre = direction * (0.5f +
-                                          Mathf.Sin(angle) * loopHeight) +
-                             tangent *
-                             (Mathf.Cos(angle) * loopHalfWidth);
+                var verticalDistortion = Mathf.Sin(
+                    Mathf.PI * 3.0f * t + phase * 5.7f) *
+                    lateralWave * 0.55f * arch;
 
-                var pathTangent =
-                    direction * (Mathf.Cos(angle) * loopHeight) -
-                    tangent * (Mathf.Sin(angle) * loopHalfWidth);
+                path[pathIndex] =
+                    direction * (0.5f + arch * loopHeight) +
+                    planeTangent * lateral +
+                    planeNormal * verticalDistortion;
+            }
 
-                pathTangent.Normalize();
+            for (var pathIndex = 0;
+                 pathIndex <= pathSegments;
+                 pathIndex++)
+            {
+                var previous = path[Mathf.Max(0, pathIndex - 1)];
+                var next = path[Mathf.Min(pathSegments, pathIndex + 1)];
+                var tangent = (next - previous).normalized;
 
-                var side = Vector3.Cross(
-                    pathTangent,
-                    bitangent).normalized;
+                if (tangent.sqrMagnitude <= 0.000001f)
+                    tangent = planeTangent;
 
-                for (var tubeIndex = 0;
-                     tubeIndex < tubeSegments;
-                     tubeIndex++)
+                pathTangents[pathIndex] = tangent;
+            }
+
+            var vertexCount = sheetCount * verticesPerSheet;
+            var vertices = new Vector3[vertexCount];
+            var normals = new Vector3[vertexCount];
+            var uvs = new Vector2[vertexCount];
+            var uv2s = new Vector2[vertexCount];
+            var colors = new Color[vertexCount];
+
+            for (var sheetIndex = 0;
+                 sheetIndex < sheetCount;
+                 sheetIndex++)
+            {
+                var sheetPhase = GetHash01(
+                    systemSeed ^
+                    ((ulong)(starIndex + 7) * 0x94D049BB133111EBUL) ^
+                    ((ulong)(prominenceIndex * 13 + sheetIndex + 1) *
+                     0xBF58476D1CE4E5B9UL));
+
+                for (var pathIndex = 0;
+                     pathIndex <= pathSegments;
+                     pathIndex++)
                 {
-                    var tubeAngle =
-                        Mathf.PI * 2.0f * tubeIndex / tubeSegments;
+                    var t = pathIndex / (float)pathSegments;
+                    var arch = Mathf.Sin(Mathf.PI * t);
+                    var pathTangent = pathTangents[pathIndex];
+                    var radial = path[pathIndex].normalized;
+                    var baseNormal = Vector3.Cross(
+                        pathTangent,
+                        radial).normalized;
 
-                    var radial = side * Mathf.Cos(tubeAngle) +
-                                 bitangent * Mathf.Sin(tubeAngle);
+                    if (baseNormal.sqrMagnitude <= 0.000001f)
+                        baseNormal = planeNormal;
 
-                    var index = pathIndex * tubeSegments + tubeIndex;
+                    var sheetAngle =
+                        (sheetIndex / (float)sheetCount + sheetPhase) *
+                        360.0f;
 
-                    vertices[index] = centre + radial * tubeRadius;
-                    normals[index] = radial;
-                    uvs[index] = new Vector2(
-                        t,
-                        tubeIndex / (float)tubeSegments);
+                    var sheetNormal = Quaternion.AngleAxis(
+                        sheetAngle,
+                        pathTangent) * baseNormal;
+                    sheetNormal.Normalize();
+
+                    var sheetSide = Vector3.Cross(
+                        sheetNormal,
+                        pathTangent).normalized;
+
+                    var width = baseWidth *
+                                (0.34f + arch * 1.08f) *
+                                (0.82f + 0.28f * Mathf.Sin(
+                                    t * Mathf.PI * 4.0f +
+                                    sheetPhase * Mathf.PI * 2.0f));
+
+                    for (var sideIndex = 0;
+                         sideIndex < 2;
+                         sideIndex++)
+                    {
+                        var side = sideIndex == 0 ? -1.0f : 1.0f;
+                        var vertexIndex =
+                            sheetIndex * verticesPerSheet +
+                            pathIndex * 2 +
+                            sideIndex;
+
+                        vertices[vertexIndex] = path[pathIndex] +
+                                                sheetSide * side * width;
+                        normals[vertexIndex] = sheetNormal;
+                        uvs[vertexIndex] = new Vector2(t, sideIndex);
+                        uv2s[vertexIndex] = new Vector2(
+                            sheetPhase,
+                            sheetIndex / (float)(sheetCount - 1));
+                        colors[vertexIndex] = new Color(
+                            sheetPhase,
+                            arch,
+                            width / Mathf.Max(baseWidth, 0.0001f),
+                            1.0f);
+                    }
                 }
             }
 
-            var triangles = new int[
-                pathSegments * tubeSegments * 6];
-
+            var triangles = new int[sheetCount * pathSegments * 6];
             var triangleIndex = 0;
 
-            for (var pathIndex = 0;
-                 pathIndex < pathSegments;
-                 pathIndex++)
+            for (var sheetIndex = 0;
+                 sheetIndex < sheetCount;
+                 sheetIndex++)
             {
-                for (var tubeIndex = 0;
-                     tubeIndex < tubeSegments;
-                     tubeIndex++)
-                {
-                    var nextTubeIndex =
-                        (tubeIndex + 1) % tubeSegments;
+                var sheetStart = sheetIndex * verticesPerSheet;
 
-                    var a = pathIndex * tubeSegments + tubeIndex;
-                    var b = pathIndex * tubeSegments + nextTubeIndex;
-                    var c = (pathIndex + 1) * tubeSegments + tubeIndex;
-                    var d = (pathIndex + 1) * tubeSegments + nextTubeIndex;
+                for (var pathIndex = 0;
+                     pathIndex < pathSegments;
+                     pathIndex++)
+                {
+                    var a = sheetStart + pathIndex * 2;
+                    var b = a + 1;
+                    var c = a + 2;
+                    var d = a + 3;
 
                     triangles[triangleIndex++] = a;
                     triangles[triangleIndex++] = c;
@@ -5403,13 +5500,15 @@ public sealed class GalaxyStarfieldRenderer
 
             var mesh = new Mesh
             {
-                name = "Runtime Star Prominence",
+                name = "Runtime Star Prominence Gas Sheets",
                 indexFormat = IndexFormat.UInt32
             };
 
             mesh.vertices = vertices;
             mesh.normals = normals;
             mesh.uv = uvs;
+            mesh.uv2 = uv2s;
+            mesh.colors = colors;
             mesh.triangles = triangles;
             mesh.RecalculateBounds();
 
@@ -5419,16 +5518,105 @@ public sealed class GalaxyStarfieldRenderer
         private static CloseSurfaceColors GetCloseSurfaceColors(
             StarType type)
         {
-            var baseColor = GetStarColor(type);
-            var surface = Color.Lerp(baseColor, Color.white, 0.32f);
-            var hot = Color.Lerp(baseColor, Color.white, 0.74f);
-            var spot = Color.Lerp(baseColor, Color.black, 0.72f);
+            switch (type)
+            {
+                case StarType.RedDwarf:
+                    return new CloseSurfaceColors(
+                        new Color(1.00f, 0.10f, 0.018f),
+                        new Color(1.18f, 0.30f, 0.050f),
+                        new Color(1.75f, 0.82f, 0.18f),
+                        new Color(0.10f, 0.004f, 0.001f));
 
-            return new CloseSurfaceColors(
-                baseColor,
-                surface,
-                hot,
-                spot);
+                case StarType.OrangeDwarf:
+                    return new CloseSurfaceColors(
+                        new Color(1.00f, 0.31f, 0.045f),
+                        new Color(1.18f, 0.56f, 0.16f),
+                        new Color(1.65f, 1.00f, 0.42f),
+                        new Color(0.13f, 0.016f, 0.002f));
+
+                case StarType.YellowDwarf:
+                    return new CloseSurfaceColors(
+                        new Color(1.00f, 0.62f, 0.16f),
+                        new Color(1.18f, 0.86f, 0.43f),
+                        new Color(1.55f, 1.28f, 0.78f),
+                        new Color(0.12f, 0.045f, 0.006f));
+
+                case StarType.WhiteDwarf:
+                    return new CloseSurfaceColors(
+                        new Color(0.62f, 0.76f, 1.00f),
+                        new Color(0.86f, 0.94f, 1.16f),
+                        new Color(1.55f, 1.72f, 2.00f),
+                        new Color(0.08f, 0.14f, 0.24f));
+
+                case StarType.RedGiant:
+                    return new CloseSurfaceColors(
+                        new Color(0.92f, 0.09f, 0.014f),
+                        new Color(1.18f, 0.34f, 0.055f),
+                        new Color(1.65f, 0.86f, 0.20f),
+                        new Color(0.11f, 0.004f, 0.001f));
+
+                case StarType.NeutronStar:
+                case StarType.Pulsar:
+                    return new CloseSurfaceColors(
+                        new Color(0.28f, 0.56f, 1.00f),
+                        new Color(0.56f, 0.78f, 1.20f),
+                        new Color(1.28f, 1.68f, 2.20f),
+                        new Color(0.018f, 0.055f, 0.16f));
+
+                default:
+                {
+                    var baseColor = GetStarColor(type);
+                    return new CloseSurfaceColors(
+                        baseColor,
+                        Color.Lerp(baseColor, Color.white, 0.35f),
+                        Color.Lerp(baseColor, Color.white, 0.78f),
+                        Color.Lerp(baseColor, Color.black, 0.78f));
+                }
+            }
+        }
+
+        private static float GetCloseSurfaceIntensity(StarData star)
+        {
+            switch (star.Type)
+            {
+                case StarType.RedDwarf:
+                case StarType.RedGiant:
+                    return 1.35f;
+
+                case StarType.WhiteDwarf:
+                case StarType.NeutronStar:
+                case StarType.Pulsar:
+                    return 1.60f;
+
+                default:
+                    return 1.20f;
+            }
+        }
+
+        private static float GetSpotStrength(StarData star)
+        {
+            switch (star.Type)
+            {
+                case StarType.RedDwarf:
+                    return 0.74f;
+
+                case StarType.RedGiant:
+                    return 0.52f;
+
+                case StarType.YellowDwarf:
+                    return 0.34f;
+
+                case StarType.OrangeDwarf:
+                    return 0.42f;
+
+                case StarType.WhiteDwarf:
+                case StarType.NeutronStar:
+                case StarType.Pulsar:
+                    return 0.12f;
+
+                default:
+                    return 0.30f;
+            }
         }
 
         private static float GetGranulationScale(StarData star)

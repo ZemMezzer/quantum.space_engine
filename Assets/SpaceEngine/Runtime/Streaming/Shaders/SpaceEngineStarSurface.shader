@@ -2,12 +2,14 @@ Shader "SpaceEngine/Streaming/Star Surface"
 {
     Properties
     {
-        [HDR] _BaseColor ("Base Color", Color) = (1, 0.75, 0.35, 1)
-        [HDR] _SurfaceColor ("Surface Color", Color) = (1, 0.85, 0.45, 1)
-        [HDR] _HotColor ("Hot Color", Color) = (1, 1, 0.85, 1)
-        [HDR] _SpotColor ("Spot Color", Color) = (0.25, 0.04, 0.01, 1)
-        _GranulationScale ("Granulation Scale", Range(4, 160)) = 52
-        _SpotScale ("Spot Scale", Range(2, 40)) = 18
+        [HDR] _BaseColor ("Base Color", Color) = (1, 0.18, 0.03, 1)
+        [HDR] _SurfaceColor ("Surface Color", Color) = (1.1, 0.42, 0.08, 1)
+        [HDR] _HotColor ("Hot Color", Color) = (1.6, 0.85, 0.2, 1)
+        [HDR] _SpotColor ("Spot Color", Color) = (0.08, 0.004, 0.001, 1)
+        _GranulationScale ("Convection Cell Scale", Range(4, 160)) = 52
+        _DetailScale ("Fine Plasma Detail Scale", Range(8, 640)) = 240
+        _SpotScale ("Active Region Scale", Range(2, 40)) = 18
+        _SpotStrength ("Active Region Strength", Range(0, 1)) = 0.45
         _FlowSpeed ("Flow Speed", Range(0, 4)) = 0.2
         _Seed ("Seed", Range(0, 1)) = 0
         _SurfaceTime ("Surface Time", Float) = 0
@@ -45,7 +47,9 @@ Shader "SpaceEngine/Streaming/Star Surface"
                 half4 _HotColor;
                 half4 _SpotColor;
                 float _GranulationScale;
+                float _DetailScale;
                 float _SpotScale;
+                float _SpotStrength;
                 float _FlowSpeed;
                 float _Seed;
                 float _SurfaceTime;
@@ -73,30 +77,37 @@ Shader "SpaceEngine/Streaming/Star Surface"
                 return frac((p.x + p.y) * p.z);
             }
 
-            float Noise3(float3 p)
+            float3 Hash33(float3 p)
             {
-                float3 i = floor(p);
-                float3 f = frac(p);
-                f = f * f * (3.0 - 2.0 * f);
+                return float3(
+                    Hash31(p + float3(11.7, 3.1, 17.9)),
+                    Hash31(p + float3(29.4, 41.3, 5.6)),
+                    Hash31(p + float3(7.2, 53.8, 31.5)));
+            }
 
-                float n000 = Hash31(i + float3(0, 0, 0));
-                float n100 = Hash31(i + float3(1, 0, 0));
-                float n010 = Hash31(i + float3(0, 1, 0));
-                float n110 = Hash31(i + float3(1, 1, 0));
-                float n001 = Hash31(i + float3(0, 0, 1));
-                float n101 = Hash31(i + float3(1, 0, 1));
-                float n011 = Hash31(i + float3(0, 1, 1));
-                float n111 = Hash31(i + float3(1, 1, 1));
+            float ValueNoise(float3 p)
+            {
+                float3 cell = floor(p);
+                float3 local = frac(p);
+                local = local * local * (3.0 - 2.0 * local);
 
-                float x00 = lerp(n000, n100, f.x);
-                float x10 = lerp(n010, n110, f.x);
-                float x01 = lerp(n001, n101, f.x);
-                float x11 = lerp(n011, n111, f.x);
+                float n000 = Hash31(cell + float3(0, 0, 0));
+                float n100 = Hash31(cell + float3(1, 0, 0));
+                float n010 = Hash31(cell + float3(0, 1, 0));
+                float n110 = Hash31(cell + float3(1, 1, 0));
+                float n001 = Hash31(cell + float3(0, 0, 1));
+                float n101 = Hash31(cell + float3(1, 0, 1));
+                float n011 = Hash31(cell + float3(0, 1, 1));
+                float n111 = Hash31(cell + float3(1, 1, 1));
 
-                float y0 = lerp(x00, x10, f.y);
-                float y1 = lerp(x01, x11, f.y);
+                float x00 = lerp(n000, n100, local.x);
+                float x10 = lerp(n010, n110, local.x);
+                float x01 = lerp(n001, n101, local.x);
+                float x11 = lerp(n011, n111, local.x);
+                float y0 = lerp(x00, x10, local.y);
+                float y1 = lerp(x01, x11, local.y);
 
-                return lerp(y0, y1, f.z);
+                return lerp(y0, y1, local.z);
             }
 
             float Fbm(float3 p)
@@ -105,14 +116,60 @@ Shader "SpaceEngine/Streaming/Star Surface"
                 float amplitude = 0.5;
 
                 [unroll]
-                for (int i = 0; i < 4; i++)
+                for (int octave = 0; octave < 4; octave++)
                 {
-                    sum += Noise3(p) * amplitude;
-                    p = p * 2.07 + 17.17;
+                    sum += ValueNoise(p) * amplitude;
+                    p = p * 2.03 + float3(17.17, 9.31, 31.73);
                     amplitude *= 0.5;
                 }
 
-                return sum;
+                return sum / 0.9375;
+            }
+
+            void Cellular(
+                float3 p,
+                out float nearestDistance,
+                out float secondDistance,
+                out float cellValue)
+            {
+                float3 cell = floor(p);
+                float3 local = frac(p);
+
+                float nearestSquared = 8.0;
+                float secondSquared = 8.0;
+                cellValue = 0.0;
+
+                [unroll]
+                for (int z = -1; z <= 1; z++)
+                {
+                    [unroll]
+                    for (int y = -1; y <= 1; y++)
+                    {
+                        [unroll]
+                        for (int x = -1; x <= 1; x++)
+                        {
+                            float3 offset = float3(x, y, z);
+                            float3 id = cell + offset;
+                            float3 feature = offset + Hash33(id);
+                            float3 delta = feature - local;
+                            float distanceSquared = dot(delta, delta);
+
+                            if (distanceSquared < nearestSquared)
+                            {
+                                secondSquared = nearestSquared;
+                                nearestSquared = distanceSquared;
+                                cellValue = Hash31(id + 91.17);
+                            }
+                            else if (distanceSquared < secondSquared)
+                            {
+                                secondSquared = distanceSquared;
+                            }
+                        }
+                    }
+                }
+
+                nearestDistance = sqrt(nearestSquared);
+                secondDistance = sqrt(secondSquared);
             }
 
             Varyings Vert(Attributes input)
@@ -121,7 +178,7 @@ Shader "SpaceEngine/Streaming/Star Surface"
                 output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
                 output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
-                output.directionOS = normalize(input.normalOS);
+                output.directionOS = normalize(input.positionOS.xyz);
                 return output;
             }
 
@@ -130,42 +187,90 @@ Shader "SpaceEngine/Streaming/Star Surface"
                 float time = _SurfaceTime * _FlowSpeed;
                 float3 direction = normalize(input.directionOS);
 
-                float3 granulationPosition =
+                // The low-frequency Worley field produces the bright cells and
+                // dark intercellular lanes of a convective photosphere. Fine
+                // flowing noise breaks their edges into turbulent plasma.
+                float3 convectionPosition =
                     direction * _GranulationScale +
-                    float3(time, time * 0.31, -time * 0.19) +
-                    _Seed * 31.73;
+                    float3(time * 0.20, -time * 0.13, time * 0.09) +
+                    _Seed * 37.31;
 
-                float coarse = Fbm(granulationPosition);
-                float fine = Fbm(granulationPosition * 4.7 + 9.1);
-                float granulation = saturate(coarse * 0.72 + fine * 0.54);
+                float nearestCell;
+                float secondCell;
+                float cellValue;
+                Cellular(
+                    convectionPosition,
+                    nearestCell,
+                    secondCell,
+                    cellValue);
+
+                float cellCore = saturate(1.0 - nearestCell * 1.16);
+                float cellBoundary = 1.0 - smoothstep(
+                    0.055,
+                    0.250,
+                    secondCell - nearestCell);
+
+                float3 detailPosition =
+                    direction * _DetailScale +
+                    float3(-time * 0.67, time * 0.31, time * 0.45) +
+                    _Seed * 83.19;
+
+                float fineTurbulence = Fbm(detailPosition);
+                float filamentTurbulence = Fbm(
+                    detailPosition * 0.42 + float3(13.1, 7.9, 29.4));
+
+                float granulation = saturate(
+                    cellCore * 0.84 +
+                    fineTurbulence * 0.29 -
+                    cellBoundary * 0.78);
+
+                float hotCell = smoothstep(0.42, 0.88, granulation);
+                float filament = smoothstep(
+                    0.66,
+                    0.91,
+                    filamentTurbulence) *
+                    (0.25 + 0.75 * cellCore);
+
+                float3 color = lerp(
+                    _BaseColor.rgb,
+                    _SurfaceColor.rgb,
+                    saturate(0.28 + granulation * 0.72));
+
+                color = lerp(
+                    color,
+                    _HotColor.rgb,
+                    hotCell * (0.58 + 0.42 * fineTurbulence));
+
+                color = lerp(
+                    color,
+                    _SpotColor.rgb,
+                    cellBoundary * (0.46 + 0.28 * (1.0 - fineTurbulence)));
 
                 float spotNoise = Fbm(
                     direction * _SpotScale +
-                    float3(-time * 0.07, time * 0.11, time * 0.05) +
-                    _Seed * 91.19);
+                    float3(time * 0.025, -time * 0.037, time * 0.019) +
+                    _Seed * 129.7);
 
-                float spots = smoothstep(0.64, 0.82, spotNoise);
+                float spots = smoothstep(0.71, 0.91, spotNoise) *
+                              _SpotStrength;
 
-                float3 colour = lerp(
-                    _SurfaceColor.rgb,
-                    _HotColor.rgb,
-                    granulation);
+                color = lerp(color, _SpotColor.rgb, spots);
+                color += _HotColor.rgb * filament * 0.16;
 
-                colour = lerp(colour, _SpotColor.rgb, spots * 0.86);
-
+                float3 normal = normalize(input.normalWS);
                 float3 viewDirection = normalize(
                     _WorldSpaceCameraPos - input.positionWS);
+                float viewAlignment = saturate(dot(normal, viewDirection));
 
-                float limb = pow(
-                    saturate(1.0 - abs(dot(
-                        normalize(input.normalWS),
-                        viewDirection))),
-                    1.6);
+                // A real photosphere darkens toward the limb; bright faculae
+                // remain visible where active plasma rises above the surface.
+                float limbDarkening = lerp(0.56, 1.0, viewAlignment);
+                float faculae = pow(1.0 - viewAlignment, 2.1) *
+                                (hotCell * 0.55 + filament * 0.45);
 
-                colour += _HotColor.rgb * limb * 0.48;
-                colour = lerp(_BaseColor.rgb, colour, 0.92);
+                color = color * limbDarkening + _HotColor.rgb * faculae * 0.26;
 
-                return half4(colour * _Intensity, 1.0);
+                return half4(color * _Intensity, 1.0);
             }
             ENDHLSL
         }
