@@ -13,25 +13,42 @@ MonoBehaviour:
   m_Name: Space Engine Configuration
   m_EditorClassIdentifier: com.tiredsiren.quantum.space_engine::SpaceEngine.Runtime.Content.SpaceEngineConfiguration
   galaxyGenerators:
-  - {fileID: 11400000, guid: eef486e11901cad4587454298d7f3a5d, type: 2}
-  - {fileID: 11400000, guid: 8db89d6676a16c64db9dee411810c764, type: 2}
-  - {fileID: 11400000, guid: ed8329f196540ce45b562e260c917bc5, type: 2}
-  - {fileID: 11400000, guid: a4990582924af6f4881094dbd21af161, type: 2}
-  - {fileID: 11400000, guid: 71c289ca845bdd64991cf9faf59a837a, type: 2}
-  - {fileID: 11400000, guid: 8ecfba0c816e0074e8d71342a8c97cd8, type: 2}
-  - {fileID: 11400000, guid: f174e8c9d0aa0054db418dd0361d8628, type: 2}
+  - entity: {fileID: 11400000, guid: 2ac8ab54d1b72f346b8d5ce77223706d, type: 2}
+    generator: {fileID: 11400000, guid: eef486e11901cad4587454298d7f3a5d, type: 2}
+  - entity: {fileID: 11400000, guid: a6acdadb922255a49b29ef56c84c1b45, type: 2}
+    generator: {fileID: 11400000, guid: 8db89d6676a16c64db9dee411810c764, type: 2}
+  - entity: {fileID: 11400000, guid: 9760adff33c989e409319553fd4b2c5e, type: 2}
+    generator: {fileID: 11400000, guid: ed8329f196540ce45b562e260c917bc5, type: 2}
+  - entity: {fileID: 11400000, guid: 23ddaec488435db49a1dee22293b886b, type: 2}
+    generator: {fileID: 11400000, guid: a4990582924af6f4881094dbd21af161, type: 2}
+  - entity: {fileID: 11400000, guid: 5ed9edc893f06bb4db3d9a51e4a96225, type: 2}
+    generator: {fileID: 11400000, guid: 71c289ca845bdd64991cf9faf59a837a, type: 2}
+  - entity: {fileID: 11400000, guid: a483dbacc9d80ba42b6ebbfc9de926e5, type: 2}
+    generator: {fileID: 11400000, guid: 8ecfba0c816e0074e8d71342a8c97cd8, type: 2}
+  - entity: {fileID: 11400000, guid: 3c3dbb84e65c45c40a3d66dabdd84f7e, type: 2}
+    generator: {fileID: 11400000, guid: f174e8c9d0aa0054db418dd0361d8628, type: 2}
   solarSystemGenerators:
   - {fileID: 11400000, guid: 63c1841743eaeee41b50bf4317ba57ff, type: 2}
   - {fileID: 11400000, guid: bbd5854559a036d4e9a955636d65e319, type: 2}
   stellarObjectGenerators:
-  - {fileID: 11400000, guid: 0f84f290e55185f4e85ff4af69dde944, type: 2}
-  - {fileID: 11400000, guid: 528b0a58f82313b43b1412221d43b670, type: 2}
-  - {fileID: 11400000, guid: a11b16b6e0a7f4d48a20ea57aea6a484, type: 2}
-  - {fileID: 11400000, guid: 3d31cef21a1eb4f438621ba2f527bbaf, type: 2}
-  - {fileID: 11400000, guid: fb60f7edaf2d27f49899ed37bc328ec8, type: 2}
+  - entity: {fileID: 11400000, guid: 1a0a3ebd7ceae6f4b9eee4b96e1da68c, type: 2}
+    generator: {fileID: 11400000, guid: 0f84f290e55185f4e85ff4af69dde944, type: 2}
+  - entity: {fileID: 11400000, guid: e206f4e6939022e499dc7b45dc32b40f, type: 2}
+    generator: {fileID: 11400000, guid: 528b0a58f82313b43b1412221d43b670, type: 2}
+  - entity: {fileID: 11400000, guid: 7628b9deda7be6c418cf0def9f7155aa, type: 2}
+    generator: {fileID: 11400000, guid: a11b16b6e0a7f4d48a20ea57aea6a484, type: 2}
+  - entity: {fileID: 11400000, guid: 7a93af0382e7cd241952d1ee2d91a2c7, type: 2}
+    generator: {fileID: 11400000, guid: 3d31cef21a1eb4f438621ba2f527bbaf, type: 2}
+  - entity: {fileID: 11400000, guid: fb485b9479ef32e4b94b0519a0a4a4ff, type: 2}
+    generator: {fileID: 11400000, guid: fb60f7edaf2d27f49899ed37bc328ec8, type: 2}
   planetGenerators:
-  - {fileID: 11400000, guid: c13599577a0ac3243b325c731b4b13e2, type: 2}
-  - {fileID: 11400000, guid: dafe4f0ee75de7e4c9a29eeee06d42f1, type: 2}
-  - {fileID: 11400000, guid: 2730b234fb5eb80418a2d5974da0cb27, type: 2}
-  - {fileID: 11400000, guid: b2359924e842641409b7411a4962b2cd, type: 2}
-  - {fileID: 11400000, guid: 2df83e095bd627c419afcf75894fe034, type: 2}
+  - entity: {fileID: 11400000, guid: a78a4da6eb8272a42b97e9c4b2ef7f89, type: 2}
+    generator: {fileID: 11400000, guid: c13599577a0ac3243b325c731b4b13e2, type: 2}
+  - entity: {fileID: 11400000, guid: 432a93ef880eb3a4ea259ec65dd878d0, type: 2}
+    generator: {fileID: 11400000, guid: dafe4f0ee75de7e4c9a29eeee06d42f1, type: 2}
+  - entity: {fileID: 11400000, guid: 887590690f5e53940a047536b4cf89be, type: 2}
+    generator: {fileID: 11400000, guid: 2730b234fb5eb80418a2d5974da0cb27, type: 2}
+  - entity: {fileID: 11400000, guid: 24e49603c8cad7b4f9c84c314a50929b, type: 2}
+    generator: {fileID: 11400000, guid: b2359924e842641409b7411a4962b2cd, type: 2}
+  - entity: {fileID: 11400000, guid: f9fb9ac11bb58e048a3a46574bd56bed, type: 2}
+    generator: {fileID: 11400000, guid: 2df83e095bd627c419afcf75894fe034, type: 2}
