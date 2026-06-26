@@ -31,6 +31,12 @@ namespace SpaceEngine.Runtime.Data.SolarSystem
             public readonly double LuminosityWatts;
 
             /// <summary>
+            /// Whether this black hole has a visible accretion disk. It stays
+            /// false for ordinary stars and inactive black holes.
+            /// </summary>
+            public readonly bool HasAccretionDisk;
+
+            /// <summary>
             /// Age in years.
             /// </summary>
             public readonly double AgeYears;
@@ -56,9 +62,10 @@ namespace SpaceEngine.Runtime.Data.SolarSystem
                 double massKg, 
                 double radiusMeters, 
                 double temperatureKelvin,
-                double luminosityWatts, 
-                double ageYears, 
-                double metallicity, 
+                double luminosityWatts,
+                bool hasAccretionDisk,
+                double ageYears,
+                double metallicity,
                 double rotationPeriodSeconds, 
                 OrbitData barycentricOrbit)
             {
@@ -67,6 +74,7 @@ namespace SpaceEngine.Runtime.Data.SolarSystem
                 RadiusMeters = radiusMeters;
                 TemperatureKelvin = temperatureKelvin;
                 LuminosityWatts = luminosityWatts;
+                HasAccretionDisk = hasAccretionDisk;
                 AgeYears = ageYears;
                 Metallicity = metallicity;
                 RotationPeriodSeconds = rotationPeriodSeconds;

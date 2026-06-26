@@ -28,6 +28,7 @@ namespace SpaceEngine.Runtime.Generation.SolarSystem
             public double RadiusSolar;
             public double TemperatureKelvin;
             public double LuminositySolar;
+            public bool HasAccretionDisk;
             public double AgeYears;
             public double Metallicity;
             public double RotationPeriodSeconds;
@@ -407,6 +408,20 @@ namespace SpaceEngine.Runtime.Generation.SolarSystem
             var radiusMeters = GetSchwarzschildRadiusMeters(
                 massSolar * SolarMassKg);
 
+            // Keep the existing random-consumption order intact so adding the
+            // disk flag does not move old systems' planets or orbital data.
+            var ageYears = quantumRandom.NextDouble(
+                10_000_000.0,
+                MaximumUniverseAgeYears);
+
+            var metallicity = quantumRandom.NextDouble(
+                0.01,
+                1.5);
+
+            var rotationPeriodSeconds = quantumRandom.NextDouble(
+                0.001,
+                10.0);
+
             return new StarPrototype
             {
                 Type = StarType.BlackHole,
@@ -414,16 +429,39 @@ namespace SpaceEngine.Runtime.Generation.SolarSystem
                 RadiusSolar = radiusMeters / SolarRadiusMeters,
                 TemperatureKelvin = 0.0,
                 LuminositySolar = 0.0,
-                AgeYears = quantumRandom.NextDouble(
-                    10_000_000.0,
-                    MaximumUniverseAgeYears),
-                Metallicity = quantumRandom.NextDouble(
-                    0.01,
-                    1.5),
-                RotationPeriodSeconds = quantumRandom.NextDouble(
-                    0.001,
-                    10.0)
+                HasAccretionDisk = HasBlackHoleAccretionDisk(
+                    massSolar,
+                    ageYears,
+                    metallicity),
+                AgeYears = ageYears,
+                Metallicity = metallicity,
+                RotationPeriodSeconds = rotationPeriodSeconds
             };
+        }
+
+        private static bool HasBlackHoleAccretionDisk(
+            double massSolar,
+            double ageYears,
+            double metallicity)
+        {
+            unchecked
+            {
+                var hash = (ulong)BitConverter.DoubleToInt64Bits(massSolar);
+                hash ^= (ulong)BitConverter.DoubleToInt64Bits(ageYears) *
+                        0x9E3779B97F4A7C15UL;
+                hash ^= (ulong)BitConverter.DoubleToInt64Bits(metallicity) *
+                        0xD1B54A32D192ED03UL;
+                hash ^= hash >> 30;
+                hash *= 0xBF58476D1CE4E5B9UL;
+                hash ^= hash >> 27;
+                hash *= 0x94D049BB133111EBUL;
+                hash ^= hash >> 31;
+
+                var normalized = (hash >> 40) /
+                                 (double)(1UL << 24);
+
+                return normalized < 0.58;
+            }
         }
 
         private static StarData CreateStar(
@@ -436,6 +474,7 @@ namespace SpaceEngine.Runtime.Generation.SolarSystem
                 prototype.RadiusSolar * SolarRadiusMeters,
                 prototype.TemperatureKelvin,
                 prototype.LuminositySolar * SolarLuminosityWatts,
+                prototype.HasAccretionDisk,
                 prototype.AgeYears,
                 prototype.Metallicity,
                 prototype.RotationPeriodSeconds,

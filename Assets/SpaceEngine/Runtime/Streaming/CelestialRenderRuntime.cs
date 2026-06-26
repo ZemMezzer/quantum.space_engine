@@ -2858,6 +2858,13 @@ public sealed class GalaxyStarfieldRenderer
         private int _maximumVisibleStars = 12_000;
         private float _minimumStarPixels = DefaultMinimumStarPixels;
         private bool _suppressAnchorSolarSystemPoint;
+        private bool _hasAnchorSolarSystemPointOverride;
+        private Color _anchorSolarSystemPointColor = Color.white;
+        private float _anchorSolarSystemPointIntensity = 1.5f;
+        private bool _hasExplicitAnchorSolarSystemLocation;
+        private SolarSystemLocationData _explicitAnchorSolarSystemLocation;
+        private bool _hasAnchorSolarSystemLocation;
+        private SolarSystemLocationData _anchorSolarSystemLocation;
 
         internal void Configure(
             GalaxySpaceAnchor anchor,
@@ -2898,6 +2905,44 @@ public sealed class GalaxyStarfieldRenderer
         internal void SetAnchorSolarSystemPointSuppressed(bool suppressed)
         {
             _suppressAnchorSolarSystemPoint = suppressed;
+        }
+
+        internal void SetAnchorSolarSystemPointOverride(
+            Color baseColor,
+            float intensity)
+        {
+            _hasAnchorSolarSystemPointOverride = true;
+            _anchorSolarSystemPointColor = baseColor;
+            _anchorSolarSystemPointIntensity = Mathf.Max(0.0f, intensity);
+        }
+
+        internal void ClearAnchorSolarSystemPointOverride()
+        {
+            _hasAnchorSolarSystemPointOverride = false;
+            _anchorSolarSystemPointColor = Color.white;
+            _anchorSolarSystemPointIntensity = 1.5f;
+        }
+
+        /// <summary>
+        /// Supplies the exact current solar-system location for the LOD 0
+        /// point. Gameplay-facing solar-system IDs are not necessarily part
+        /// of the density-driven sector catalogue, so relying on a matching
+        /// streamed sector entry can leave the active system with no distant
+        /// point to return to after its LOD 1 proxy is unloaded.
+        /// </summary>
+        internal void SetAnchorSolarSystemLocation(
+            in SolarSystemLocationData location)
+        {
+            _explicitAnchorSolarSystemLocation = location;
+            _hasExplicitAnchorSolarSystemLocation = true;
+        }
+
+        internal void ClearAnchorSolarSystemLocation()
+        {
+            _explicitAnchorSolarSystemLocation = default;
+            _hasExplicitAnchorSolarSystemLocation = false;
+            _anchorSolarSystemLocation = default;
+            _hasAnchorSolarSystemLocation = false;
         }
 
         public int LoadedSectorCount => _loadedSectors.Count;
@@ -3230,79 +3275,97 @@ public sealed class GalaxyStarfieldRenderer
             }
 
             CollectVisibleStars();
-            if (_visibleStars.Count == 0)
+            var shouldRenderAnchorPoint = ShouldRenderAnchorSolarSystemPoint();
+
+            if (_visibleStars.Count == 0 && !shouldRenderAnchorPoint)
                 return;
-
-            _visibleStars.Sort((left, right) =>
-                left.DistanceSquaredLightYears.CompareTo(
-                    right.DistanceSquaredLightYears));
-
-            EnsureMatrixStorage(_visibleStars.Count, ref _matrices);
 
             var anchorPosition = galaxyAnchor.GalaxyLocalPositionLightYears;
             var cameraRotation = camera.transform.rotation;
             var visibleCount = 0;
 
-            for (var i = 0; i < _visibleStars.Count; i++)
+            if (_visibleStars.Count > 0)
             {
-                var star = _visibleStars[i].Location;
-                var relative =
-                    star.GalaxyLocalPositionLightYears - anchorPosition;
-                var position = ToUnityPosition(relative);
+                _visibleStars.Sort((left, right) =>
+                    left.DistanceSquaredLightYears.CompareTo(
+                        right.DistanceSquaredLightYears));
 
-                if (!IsInCameraFrustum(camera, position))
-                    continue;
+                EnsureMatrixStorage(_visibleStars.Count, ref _matrices);
 
-                var batchIndex = visibleCount / MaximumInstancesPerDrawCall;
-                var instanceIndex = visibleCount % MaximumInstancesPerDrawCall;
-                var diameter = GetPointDiameter(
-                    camera,
-                    position.magnitude,
-                    star.EstimatedSystemMassSolarMasses);
+                for (var i = 0; i < _visibleStars.Count; i++)
+                {
+                    var star = _visibleStars[i].Location;
+                    var relative =
+                        star.GalaxyLocalPositionLightYears - anchorPosition;
+                    var position = ToUnityPosition(relative);
 
-                _matrices[batchIndex][instanceIndex] = Matrix4x4.TRS(
-                    position,
-                    cameraRotation,
-                    Vector3.one * diameter);
+                    if (!IsInCameraFrustum(camera, position))
+                        continue;
 
-                visibleCount++;
+                    var batchIndex =
+                        visibleCount / MaximumInstancesPerDrawCall;
+                    var instanceIndex =
+                        visibleCount % MaximumInstancesPerDrawCall;
+                    var diameter = GetPointDiameter(
+                        camera,
+                        position.magnitude,
+                        star.EstimatedSystemMassSolarMasses);
+
+                    _matrices[batchIndex][instanceIndex] = Matrix4x4.TRS(
+                        position,
+                        cameraRotation,
+                        Vector3.one * diameter);
+
+                    visibleCount++;
+                }
             }
 
-            if (visibleCount == 0)
+            if (visibleCount == 0 && !shouldRenderAnchorPoint)
                 return;
 
             _propertyBlock ??= new MaterialPropertyBlock();
-            _propertyBlock.Clear();
-            _propertyBlock.SetColor("_Color", Color.white);
-            _propertyBlock.SetColor("_BaseColor", Color.white);
-            _propertyBlock.SetColor("_EmissionColor", Color.white * 1.5f);
 
-            var drawn = 0;
-            for (var batchIndex = 0;
-                 batchIndex < _matrices.Length && drawn < visibleCount;
-                 batchIndex++)
+            if (visibleCount > 0)
             {
-                var count = Mathf.Min(
-                    MaximumInstancesPerDrawCall,
-                    visibleCount - drawn);
+                _propertyBlock.Clear();
+                _propertyBlock.SetColor("_Color", Color.white);
+                _propertyBlock.SetColor("_BaseColor", Color.white);
+                _propertyBlock.SetColor(
+                    "_EmissionColor",
+                    Color.white * 1.5f);
+                _propertyBlock.SetFloat("_Intensity", 1.0f);
 
-                Graphics.DrawMeshInstanced(
-                    mesh,
-                    0,
-                    material,
-                    _matrices[batchIndex],
-                    count,
-                    _propertyBlock,
-                    ShadowCastingMode.Off,
-                    false,
-                    ReferenceFrameLayerUtility.GetSingleLayerIndexOrDefault(
-                        celestialLayer),
-                    null,
-                    LightProbeUsage.Off,
-                    null);
+                var drawn = 0;
+                for (var batchIndex = 0;
+                     batchIndex < _matrices.Length && drawn < visibleCount;
+                     batchIndex++)
+                {
+                    var count = Mathf.Min(
+                        MaximumInstancesPerDrawCall,
+                        visibleCount - drawn);
 
-                drawn += count;
+                    Graphics.DrawMeshInstanced(
+                        mesh,
+                        0,
+                        material,
+                        _matrices[batchIndex],
+                        count,
+                        _propertyBlock,
+                        ShadowCastingMode.Off,
+                        false,
+                        ReferenceFrameLayerUtility
+                            .GetSingleLayerIndexOrDefault(
+                                celestialLayer),
+                        null,
+                        LightProbeUsage.Off,
+                        null);
+
+                    drawn += count;
+                }
             }
+
+            if (shouldRenderAnchorPoint)
+                RenderAnchorSolarSystemPoint(camera, mesh, material);
         }
 
 
@@ -3310,7 +3373,22 @@ public sealed class GalaxyStarfieldRenderer
         {
             _visibleStars.Clear();
 
+            // The active system is rendered in a separate draw call. This
+            // guarantees a LOD 0 fallback even for a logical gameplay ID
+            // that is absent from the streamed density catalogue, and avoids
+            // duplicating it when the same system is present in a sector.
+            _hasAnchorSolarSystemLocation =
+                _hasExplicitAnchorSolarSystemLocation;
+
+            if (_hasAnchorSolarSystemLocation)
+            {
+                _anchorSolarSystemLocation =
+                    _explicitAnchorSolarSystemLocation;
+            }
+
             var anchorPosition = galaxyAnchor.GalaxyLocalPositionLightYears;
+            var anchorSolarSystemID =
+                galaxyAnchor.Coordinates.SolarSystemID;
             var renderRadiusLightYears =
                 (_horizontalSectorRadius + CachedBorderInSectors) *
                 GalaxySectorGenerator.SECTOR_SIZE_LIGHT_YEARS;
@@ -3323,10 +3401,14 @@ public sealed class GalaxyStarfieldRenderer
                 {
                     var location = sector[i];
 
-                    if (_suppressAnchorSolarSystemPoint &&
-                        location.SolarSystemID ==
-                        galaxyAnchor.Coordinates.SolarSystemID)
+                    if (location.SolarSystemID == anchorSolarSystemID)
                     {
+                        if (!_hasAnchorSolarSystemLocation)
+                        {
+                            _anchorSolarSystemLocation = location;
+                            _hasAnchorSolarSystemLocation = true;
+                        }
+
                         continue;
                     }
 
@@ -3353,6 +3435,70 @@ public sealed class GalaxyStarfieldRenderer
                     _maximumVisibleStars,
                     _visibleStars.Count - _maximumVisibleStars);
             }
+        }
+
+        private bool ShouldRenderAnchorSolarSystemPoint()
+        {
+            return !_suppressAnchorSolarSystemPoint &&
+                   _hasAnchorSolarSystemLocation;
+        }
+
+        private void RenderAnchorSolarSystemPoint(
+            Camera camera,
+            Mesh mesh,
+            Material material)
+        {
+            if (!ShouldRenderAnchorSolarSystemPoint() ||
+                galaxyAnchor == null)
+            {
+                return;
+            }
+
+            var relative =
+                _anchorSolarSystemLocation.GalaxyLocalPositionLightYears -
+                galaxyAnchor.GalaxyLocalPositionLightYears;
+            var position = ToUnityPosition(relative);
+
+            if (!IsInCameraFrustum(camera, position))
+                return;
+
+            var diameter = GetPointDiameter(
+                camera,
+                position.magnitude,
+                _anchorSolarSystemLocation.EstimatedSystemMassSolarMasses);
+            var matrix = Matrix4x4.TRS(
+                position,
+                camera.transform.rotation,
+                Vector3.one * diameter);
+
+            _propertyBlock ??= new MaterialPropertyBlock();
+            _propertyBlock.Clear();
+            _propertyBlock.SetColor("_Color", _anchorSolarSystemPointColor);
+            _propertyBlock.SetColor(
+                "_BaseColor",
+                _anchorSolarSystemPointColor);
+            _propertyBlock.SetColor(
+                "_EmissionColor",
+                _anchorSolarSystemPointColor *
+                _anchorSolarSystemPointIntensity);
+            _propertyBlock.SetFloat(
+                "_Intensity",
+                _anchorSolarSystemPointIntensity);
+
+            Graphics.DrawMesh(
+                mesh,
+                matrix,
+                material,
+                ReferenceFrameLayerUtility.GetSingleLayerIndexOrDefault(
+                    celestialLayer),
+                null,
+                0,
+                _propertyBlock,
+                ShadowCastingMode.Off,
+                false,
+                null,
+                LightProbeUsage.Off,
+                null);
         }
 
 
@@ -3611,6 +3757,13 @@ public sealed class GalaxyStarfieldRenderer
     /// </summary>
     public sealed class SolarSystemScaledSpaceRenderer
     {
+        // The accretion-disk mesh is authored around a unit sphere whose
+        // transform has a diameter of two physical horizon radii. Keeping the
+        // outer mesh radius here lets the LOD 1 disk use a screen-size floor
+        // without inflating the event horizon itself.
+        private const float BlackHoleAccretionDiskInnerMeshRadius = 1.55f;
+        private const float BlackHoleAccretionDiskOuterMeshRadius = 8.75f;
+
         public readonly struct StarProximityData
         {
             public readonly int StarIndex;
@@ -3643,6 +3796,9 @@ public sealed class GalaxyStarfieldRenderer
             public Transform Lod1LightTransform;
             public MeshRenderer Lod1LightRenderer;
             public Material Lod1LightMaterial;
+            public Transform AccretionDiskTransform;
+            public MeshRenderer AccretionDiskRenderer;
+            public Material AccretionDiskMaterial;
             public double3 BarycentricPositionMeters;
         }
 
@@ -3664,6 +3820,25 @@ public sealed class GalaxyStarfieldRenderer
             // It deliberately does not use solid tube primitives.
             public Material ProminenceMaterial;
             public readonly List<Mesh> ProminenceMeshes = new();
+        }
+
+        /// <summary>
+        /// Runtime-only detailed black-hole visual. The horizon is a real
+        /// sphere at the generated Schwarzschild radius; the larger shell
+        /// only renders the optical lensing region around it.
+        /// </summary>
+        private sealed class CloseBlackHoleVisual
+        {
+            public int StarIndex = -1;
+            public Transform Root;
+            public MeshRenderer HorizonRenderer;
+            public Transform LensingShellTransform;
+            public MeshRenderer LensingShellRenderer;
+            public Transform AccretionDiskTransform;
+            public MeshRenderer AccretionDiskRenderer;
+            public Material HorizonMaterial;
+            public Material LensingMaterial;
+            public Material AccretionDiskMaterial;
         }
 
         private sealed class PlanetVisual
@@ -3717,7 +3892,51 @@ public sealed class GalaxyStarfieldRenderer
             }
         }
 
+        /// <summary>
+        /// Black holes share the stellar-system body key, but own a separate
+        /// detailed renderer: an event-horizon sphere, optional accretion
+        /// disk, and a screen-colour lensing shell.
+        /// </summary>
+        private sealed class BlackHoleLocalLodRenderer :
+            ICelestialBodyLodRenderer,
+            IDisposable
+        {
+            private readonly SolarSystemScaledSpaceRenderer _owner;
+            private readonly int _starIndex;
+
+            public BlackHoleLocalLodRenderer(
+                SolarSystemScaledSpaceRenderer owner,
+                int starIndex)
+            {
+                _owner = owner;
+                _starIndex = starIndex;
+            }
+
+            public CelestialBodyRenderKey Key => new(
+                CelestialBodyKind.Star,
+                _starIndex);
+
+            public bool IsActive =>
+                _owner.IsBlackHoleLocalVisualActive(_starIndex);
+
+            public void SetLodActive(bool isActive)
+            {
+                _owner.SetBlackHoleLocalVisualActive(_starIndex, isActive);
+            }
+
+            public void UpdateLod(in CelestialBodyLodContext context)
+            {
+                _owner.UpdateBlackHoleLocalVisual(_starIndex, context);
+            }
+
+            public void Dispose()
+            {
+                _owner.DestroyBlackHoleLocalVisual(_starIndex);
+            }
+        }
+
         private readonly Transform ownerTransform;
+        private Camera celestialCamera;
         private SeamlessSpaceAnchor spaceAnchor;
         private Transform visualRoot;
         private Mesh sphereMesh;
@@ -3761,7 +3980,9 @@ public sealed class GalaxyStarfieldRenderer
         private Mesh _runtimeSphereMesh;
         private Mesh _runtimeLod1LightQuadMesh;
         private Mesh _runtimeCloseStarSurfaceMesh;
+        private Mesh _runtimeBlackHoleAccretionDiskMesh;
         private CloseStarSurfaceVisual _closeStarSurfaceVisual;
+        private CloseBlackHoleVisual _closeBlackHoleVisual;
 
         /// <summary>
         /// Fires when the nearest star enters or leaves the high-detail
@@ -3831,6 +4052,7 @@ public sealed class GalaxyStarfieldRenderer
 
         internal void Configure(
             SeamlessSpaceAnchor anchor,
+            Camera frameCamera,
             LayerMask frameLayer,
             float minimumStarAngularDiameter,
             float minimumPlanetAngularDiameter,
@@ -3849,6 +4071,7 @@ public sealed class GalaxyStarfieldRenderer
             double lod2PlanetSurfaceDeactivationDistanceInRadii)
         {
             spaceAnchor = anchor;
+            celestialCamera = frameCamera;
             scaledSpaceLayer = frameLayer;
             minimumStarAngularDiameterDegrees = Mathf.Max(
                 0.001f,
@@ -3919,6 +4142,9 @@ public sealed class GalaxyStarfieldRenderer
 
             if (_runtimeCloseStarSurfaceMesh != null)
                 UnityEngine.Object.Destroy(_runtimeCloseStarSurfaceMesh);
+
+            if (_runtimeBlackHoleAccretionDiskMesh != null)
+                UnityEngine.Object.Destroy(_runtimeBlackHoleAccretionDiskMesh);
         }
 
         public void SetScaledSpaceVisible(bool isVisible)
@@ -4004,8 +4230,10 @@ public sealed class GalaxyStarfieldRenderer
             if (!TryGetNearestStar(out var proximity))
                 return false;
 
-            var renderedRadius = GetStarRenderRadiusMeters(
-                proximity.RadiusMeters,
+            var nearestStar = _stars[proximity.StarIndex];
+
+            var renderedRadius = GetStarLod1VisibilityRadiusMeters(
+                nearestStar.Data,
                 proximity.DistanceToCentreMeters);
 
             return GetAngularDiameterDegrees(
@@ -4041,9 +4269,10 @@ public sealed class GalaxyStarfieldRenderer
                 var star = _solarSystem.Stars[i];
                 _stars.Add(CreateStarVisual(star, i));
 
-                var lod2Renderer = new StarLocalSurfaceLodRenderer(
-                    this,
-                    i);
+                ICelestialBodyLodRenderer lod2Renderer =
+                    star.Type == StarType.BlackHole
+                        ? new BlackHoleLocalLodRenderer(this, i)
+                        : new StarLocalSurfaceLodRenderer(this, i);
 
                 RegisterLod2Renderer(lod2Renderer);
                 _ownedLod2Renderers.Add(lod2Renderer);
@@ -4080,6 +4309,12 @@ public sealed class GalaxyStarfieldRenderer
                 Material = material
             };
 
+            if (data.Type == StarType.BlackHole &&
+                data.HasAccretionDisk)
+            {
+                CreateBlackHoleProxyDiskVisual(visual, index);
+            }
+
             if (coronaMaterial != null &&
                 data.Type != StarType.BlackHole)
             {
@@ -4108,6 +4343,64 @@ public sealed class GalaxyStarfieldRenderer
 
             CreateStarLod1LightVisual(visual, index);
             return visual;
+        }
+
+        private void CreateBlackHoleProxyDiskVisual(
+            StarVisual visual,
+            int starIndex)
+        {
+            if (visual.Transform == null)
+                return;
+
+            var layer = ReferenceFrameLayerUtility
+                .GetSingleLayerIndexOrDefault(scaledSpaceLayer);
+
+            var diskObject = new GameObject("Accretion Disk")
+            {
+                layer = layer
+            };
+
+            var diskTransform = diskObject.transform;
+            diskTransform.SetParent(visual.Transform, false);
+            diskTransform.localPosition = Vector3.zero;
+            diskTransform.localRotation = GetBlackHoleDiskRotation(starIndex);
+            diskTransform.localScale = Vector3.one;
+
+            diskObject.AddComponent<MeshFilter>().sharedMesh =
+                ResolveBlackHoleAccretionDiskMesh();
+
+            var diskRenderer = diskObject.AddComponent<MeshRenderer>();
+            diskRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            diskRenderer.receiveShadows = false;
+
+            var diskMaterial = CreateBlackHoleAccretionDiskMaterial(
+                visual.Data,
+                starIndex,
+                detailed: false);
+
+            diskRenderer.sharedMaterial = diskMaterial;
+            visual.AccretionDiskTransform = diskTransform;
+            visual.AccretionDiskRenderer = diskRenderer;
+            visual.AccretionDiskMaterial = diskMaterial;
+        }
+
+        private void UpdateBlackHoleProxyVisual(
+            StarVisual visual,
+            int starIndex,
+            double distanceToCentreMeters)
+        {
+            UpdateBlackHoleProxyDiskScale(
+                visual,
+                distanceToCentreMeters);
+
+            if (visual.AccretionDiskMaterial == null)
+                return;
+
+            UpdateBlackHoleAccretionDiskMaterial(
+                visual.AccretionDiskMaterial,
+                visual.Data,
+                starIndex,
+                detailed: false);
         }
 
         private void CreateStarLod1LightVisual(
@@ -4216,7 +4509,7 @@ public sealed class GalaxyStarfieldRenderer
 
                 var distanceToCentre = math.length(relativeMeters);
                 var renderRadius = GetStarRenderRadiusMeters(
-                    star.Data.RadiusMeters,
+                    star.Data,
                     distanceToCentre);
 
                 ApplyTransform(
@@ -4230,6 +4523,14 @@ public sealed class GalaxyStarfieldRenderer
                     star.CoronaTransform.localRotation = Quaternion.identity;
                     star.CoronaTransform.localScale =
                         Vector3.one * coronaRadiusMultiplier;
+                }
+
+                if (star.Data.Type == StarType.BlackHole)
+                {
+                    UpdateBlackHoleProxyVisual(
+                        star,
+                        i,
+                        distanceToCentre);
                 }
 
                 if (distanceToCentre < nearestStarDistanceMeters)
@@ -4289,17 +4590,126 @@ public sealed class GalaxyStarfieldRenderer
         }
 
         private double GetStarRenderRadiusMeters(
-            double physicalRadiusMeters,
+            StarData star,
             double distanceToCentreMeters)
         {
+            if (star.Type == StarType.BlackHole)
+            {
+                return GetBlackHoleProxyRenderRadiusMeters(
+                    star.RadiusMeters);
+            }
+
             var presentationRadius = GetStarPresentationRadiusMeters(
-                physicalRadiusMeters);
+                star.RadiusMeters);
 
             var angularRadius = GetMinimumAngularRadiusMeters(
                 distanceToCentreMeters,
                 minimumStarAngularDiameterDegrees);
 
             return Math.Max(presentationRadius, angularRadius);
+        }
+
+        /// <summary>
+        /// Returns the LOD 1 silhouette radius that participates in the
+        /// LOD 0-to-LOD 1 handoff. An accretion disk may be visible long
+        /// before the physical event horizon, so the handoff must consider
+        /// the disk's real outer edge rather than only the tiny horizon.
+        /// </summary>
+        private double GetStarLod1VisibilityRadiusMeters(
+            StarData star,
+            double distanceToCentreMeters)
+        {
+            if (star.Type != StarType.BlackHole)
+            {
+                return GetStarRenderRadiusMeters(
+                    star,
+                    distanceToCentreMeters);
+            }
+
+            if (!star.HasAccretionDisk)
+            {
+                return GetBlackHoleProxyRenderRadiusMeters(
+                    star.RadiusMeters);
+            }
+
+            return GetBlackHoleLod1DiskOuterRadiusMeters(
+                star.RadiusMeters,
+                distanceToCentreMeters);
+        }
+
+        /// <summary>
+        /// Keeps the LOD 1 event horizon at its physical Schwarzschild radius.
+        /// The distant visibility floor is applied only to the accretion disk,
+        /// whose full outer silhouette can then shrink continuously into the
+        /// same LOD 0 point used by ordinary stars.
+        /// </summary>
+        private static double GetBlackHoleProxyRenderRadiusMeters(
+            double physicalRadiusMeters)
+        {
+            return Math.Max(0.0, physicalRadiusMeters);
+        }
+
+        private double GetBlackHoleLod1DiskOuterRadiusMeters(
+            double physicalHorizonRadiusMeters,
+            double distanceToCentreMeters)
+        {
+            var physicalDiskOuterRadius =
+                GetBlackHolePhysicalDiskOuterRadiusMeters(
+                    physicalHorizonRadiusMeters);
+
+            var minimumVisibleDiskOuterRadius =
+                GetMinimumAngularRadiusMeters(
+                    distanceToCentreMeters,
+                    minimumStarAngularDiameterDegrees);
+
+            return Math.Max(
+                physicalDiskOuterRadius,
+                minimumVisibleDiskOuterRadius);
+        }
+
+        private static double GetBlackHolePhysicalDiskOuterRadiusMeters(
+            double physicalHorizonRadiusMeters)
+        {
+            // The root transform represents a sphere with a local radius of
+            // 0.5, while the disk mesh is authored in root-local units.
+            return Math.Max(
+                0.0,
+                physicalHorizonRadiusMeters *
+                2.0 *
+                BlackHoleAccretionDiskOuterMeshRadius);
+        }
+
+        private void UpdateBlackHoleProxyDiskScale(
+            StarVisual visual,
+            double distanceToCentreMeters)
+        {
+            if (visual == null ||
+                visual.AccretionDiskTransform == null)
+            {
+                return;
+            }
+
+            var physicalDiskOuterRadius =
+                GetBlackHolePhysicalDiskOuterRadiusMeters(
+                    visual.Data.RadiusMeters);
+
+            if (physicalDiskOuterRadius <= 0.0)
+            {
+                visual.AccretionDiskTransform.localScale = Vector3.one;
+                return;
+            }
+
+            var targetDiskOuterRadius =
+                GetBlackHoleLod1DiskOuterRadiusMeters(
+                    visual.Data.RadiusMeters,
+                    distanceToCentreMeters);
+
+            var scale = (float)Math.Max(
+                1.0,
+                targetDiskOuterRadius / physicalDiskOuterRadius);
+
+            visual.AccretionDiskTransform.localScale =
+                Vector3.one * scale;
         }
 
         private double GetPlanetRenderRadiusMeters(
@@ -4376,7 +4786,6 @@ public sealed class GalaxyStarfieldRenderer
 
             var shouldBeActive =
                 starLod2LocalSurfaceEnabled &&
-                star.Data.Type != StarType.BlackHole &&
                 star.Data.RadiusMeters > 0.0 &&
                 IsWithinLodRange(
                     lodRenderer.IsActive,
@@ -4396,7 +4805,10 @@ public sealed class GalaxyStarfieldRenderer
                 visualRoot,
                 physicalRelativeMeters,
                 star.Data.RadiusMeters,
-                GetStarPresentationRadiusMeters(star.Data.RadiusMeters),
+                star.Data.Type == StarType.BlackHole
+                    ? star.Data.RadiusMeters
+                    : GetStarPresentationRadiusMeters(
+                        star.Data.RadiusMeters),
                 distanceToCentreMeters,
                 distanceInRadii,
                 scaledSpaceMetersPerUnityUnit,
@@ -4942,6 +5354,472 @@ public sealed class GalaxyStarfieldRenderer
             }
         }
 
+        private bool IsBlackHoleLocalVisualActive(int starIndex)
+        {
+            return _closeBlackHoleVisual != null &&
+                   _closeBlackHoleVisual.StarIndex == starIndex &&
+                   _closeBlackHoleVisual.Root != null &&
+                   _closeBlackHoleVisual.Root.gameObject.activeSelf;
+        }
+
+        private void SetBlackHoleLocalVisualActive(
+            int starIndex,
+            bool isActive)
+        {
+            if (starIndex < 0 || starIndex >= _stars.Count)
+                return;
+
+            if (!isActive)
+            {
+                if (_closeBlackHoleVisual != null &&
+                    _closeBlackHoleVisual.StarIndex == starIndex)
+                {
+                    DeactivateCloseBlackHoleLod(destroyVisual: false);
+                }
+
+                return;
+            }
+
+            EnsureCloseBlackHoleVisual(starIndex, _stars[starIndex]);
+        }
+
+        private void UpdateBlackHoleLocalVisual(
+            int starIndex,
+            in CelestialBodyLodContext context)
+        {
+            if (starIndex < 0 || starIndex >= _stars.Count)
+                return;
+
+            var star = _stars[starIndex];
+
+            if (star.Data.Type != StarType.BlackHole)
+                return;
+
+            EnsureCloseBlackHoleVisual(starIndex, star);
+
+            if (_closeBlackHoleVisual == null ||
+                _closeBlackHoleVisual.StarIndex != starIndex ||
+                _closeBlackHoleVisual.Root == null)
+            {
+                return;
+            }
+
+            // Unlike a normal star's close LOD, a black hole must preserve its
+            // generated horizon radius. It is already large enough in angular
+            // terms by the time this local LOD activates.
+            CelestialBodyLodTransformUtility.ApplyPhysicalTransform(
+                _closeBlackHoleVisual.Root,
+                context);
+
+            UpdateCloseBlackHoleMaterials(
+                _closeBlackHoleVisual,
+                star.Data,
+                starIndex);
+        }
+
+        private void DestroyBlackHoleLocalVisual(int starIndex)
+        {
+            if (_closeBlackHoleVisual != null &&
+                _closeBlackHoleVisual.StarIndex == starIndex)
+            {
+                DeactivateCloseBlackHoleLod(destroyVisual: true);
+            }
+        }
+
+        private void EnsureCloseBlackHoleVisual(
+            int starIndex,
+            StarVisual star)
+        {
+            if (_closeBlackHoleVisual != null &&
+                _closeBlackHoleVisual.StarIndex == starIndex &&
+                _closeBlackHoleVisual.Root != null)
+            {
+                if (_closeBlackHoleVisual.Root.parent != visualRoot)
+                {
+                    _closeBlackHoleVisual.Root.SetParent(
+                        visualRoot,
+                        worldPositionStays: false);
+                }
+
+                _closeBlackHoleVisual.Root.gameObject.SetActive(true);
+                SetBaseStarVisualVisible(star, false);
+                return;
+            }
+
+            DeactivateCloseBlackHoleLod(destroyVisual: true);
+
+            var layer = ReferenceFrameLayerUtility
+                .GetSingleLayerIndexOrDefault(scaledSpaceLayer);
+
+            var rootObject = new GameObject("Black Hole LOD 2")
+            {
+                layer = layer
+            };
+
+            var root = rootObject.transform;
+            root.SetParent(visualRoot, false);
+            root.localPosition = Vector3.zero;
+            root.localRotation = Quaternion.identity;
+            root.localScale = Vector3.one;
+
+            rootObject.AddComponent<MeshFilter>().sharedMesh =
+                ResolveCloseStarSurfaceMesh();
+
+            var horizonRenderer = rootObject.AddComponent<MeshRenderer>();
+            horizonRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            horizonRenderer.receiveShadows = false;
+
+            var visual = new CloseBlackHoleVisual
+            {
+                StarIndex = starIndex,
+                Root = root,
+                HorizonRenderer = horizonRenderer,
+                HorizonMaterial = CreateBlackHoleHorizonMaterial(
+                    star.Data,
+                    starIndex)
+            };
+
+            horizonRenderer.sharedMaterial = visual.HorizonMaterial;
+
+            var lensingObject = new GameObject("Gravitational Lensing Shell")
+            {
+                layer = layer
+            };
+
+            var lensingTransform = lensingObject.transform;
+            lensingTransform.SetParent(root, false);
+            lensingTransform.localPosition = Vector3.zero;
+            lensingTransform.localRotation = Quaternion.identity;
+            lensingTransform.localScale = Vector3.one * 12.0f;
+
+            lensingObject.AddComponent<MeshFilter>().sharedMesh =
+                ResolveCloseStarSurfaceMesh();
+
+            var lensingRenderer = lensingObject.AddComponent<MeshRenderer>();
+            lensingRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            lensingRenderer.receiveShadows = false;
+
+            visual.LensingShellTransform = lensingTransform;
+            visual.LensingShellRenderer = lensingRenderer;
+            visual.LensingMaterial = CreateBlackHoleLensingMaterial(starIndex);
+            lensingRenderer.sharedMaterial = visual.LensingMaterial;
+            lensingObject.SetActive(visual.LensingMaterial != null);
+
+            if (star.Data.HasAccretionDisk)
+            {
+                var diskObject = new GameObject("Accretion Disk")
+                {
+                    layer = layer
+                };
+
+                var diskTransform = diskObject.transform;
+                diskTransform.SetParent(root, false);
+                diskTransform.localPosition = Vector3.zero;
+                diskTransform.localRotation = GetBlackHoleDiskRotation(starIndex);
+                diskTransform.localScale = Vector3.one;
+
+                diskObject.AddComponent<MeshFilter>().sharedMesh =
+                    ResolveBlackHoleAccretionDiskMesh();
+
+                var diskRenderer = diskObject.AddComponent<MeshRenderer>();
+                diskRenderer.shadowCastingMode = ShadowCastingMode.Off;
+                diskRenderer.receiveShadows = false;
+
+                visual.AccretionDiskTransform = diskTransform;
+                visual.AccretionDiskRenderer = diskRenderer;
+                visual.AccretionDiskMaterial =
+                    CreateBlackHoleAccretionDiskMaterial(
+                        star.Data,
+                        starIndex,
+                        detailed: true);
+
+                diskRenderer.sharedMaterial = visual.AccretionDiskMaterial;
+            }
+
+            _closeBlackHoleVisual = visual;
+            UpdateCloseBlackHoleMaterials(visual, star.Data, starIndex);
+            SetBaseStarVisualVisible(star, false);
+        }
+
+        private void UpdateCloseBlackHoleMaterials(
+            CloseBlackHoleVisual visual,
+            StarData star,
+            int starIndex)
+        {
+            if (visual == null)
+                return;
+
+            var hasDisk = star.HasAccretionDisk;
+            var time = (float)_simulationTimeSeconds;
+            var photonColor = hasDisk
+                ? new Color(1.0f, 0.30f, 0.055f, 1.0f)
+                : new Color(0.07f, 0.12f, 0.20f, 1.0f);
+
+            if (visual.HorizonMaterial != null)
+            {
+                SetColorIfPresent(
+                    visual.HorizonMaterial,
+                    "_PhotonRingColor",
+                    photonColor);
+                SetFloatIfPresent(
+                    visual.HorizonMaterial,
+                    "_PhotonRingIntensity",
+                    hasDisk ? 0.72f : 0.08f);
+            }
+
+            if (visual.LensingMaterial != null)
+            {
+                SetFloatIfPresent(
+                    visual.LensingMaterial,
+                    "_SurfaceTime",
+                    time);
+                SetFloatIfPresent(
+                    visual.LensingMaterial,
+                    "_LensingStrength",
+                    hasDisk ? 0.86f : 0.74f);
+                SetFloatIfPresent(
+                    visual.LensingMaterial,
+                    "_SceneColorAvailable",
+                    Shader.GetGlobalTexture("_CameraOpaqueTexture") != null
+                        ? 1.0f
+                        : 0.0f);
+
+                UpdateBlackHoleLensingScreenData(visual);
+            }
+
+            UpdateBlackHoleAccretionDiskMaterial(
+                visual.AccretionDiskMaterial,
+                star,
+                starIndex,
+                detailed: true);
+        }
+
+        private void UpdateBlackHoleLensingScreenData(
+            CloseBlackHoleVisual visual)
+        {
+            if (visual == null ||
+                visual.Root == null ||
+                visual.LensingShellTransform == null ||
+                visual.LensingMaterial == null)
+            {
+                return;
+            }
+
+            var camera = celestialCamera != null
+                ? celestialCamera
+                : Camera.main;
+
+            if (camera == null)
+                return;
+
+            var centre = camera.WorldToViewportPoint(visual.Root.position);
+
+            if (centre.z <= 0.0f)
+                return;
+
+            var horizonWorldRadius = visual.Root.lossyScale.x * 0.5f;
+            var lensingRadius = horizonWorldRadius *
+                                Mathf.Abs(
+                                    visual.LensingShellTransform
+                                        .localScale.x);
+
+            var edge = camera.WorldToViewportPoint(
+                visual.Root.position +
+                camera.transform.right * lensingRadius);
+
+            var viewportRadius = Mathf.Abs(edge.x - centre.x);
+
+            if (viewportRadius <= 0.00001f)
+            {
+                var verticalEdge = camera.WorldToViewportPoint(
+                    visual.Root.position +
+                    camera.transform.up * lensingRadius);
+
+                viewportRadius = Mathf.Abs(verticalEdge.y - centre.y);
+            }
+
+            SetVectorIfPresent(
+                visual.LensingMaterial,
+                "_LensCenterViewport",
+                new Vector4(centre.x, centre.y, 0.0f, 0.0f));
+
+            SetFloatIfPresent(
+                visual.LensingMaterial,
+                "_LensViewportRadius",
+                Mathf.Clamp(viewportRadius, 0.0001f, 2.0f));
+        }
+
+        private void DeactivateCloseBlackHoleLod(bool destroyVisual)
+        {
+            if (_closeBlackHoleVisual == null)
+                return;
+
+            var activeStarIndex = _closeBlackHoleVisual.StarIndex;
+
+            if (activeStarIndex >= 0 &&
+                activeStarIndex < _stars.Count)
+            {
+                SetBaseStarVisualVisible(
+                    _stars[activeStarIndex],
+                    true);
+            }
+
+            if (destroyVisual)
+            {
+                if (_closeBlackHoleVisual.Root != null)
+                {
+                    DestroyVisualObject(_closeBlackHoleVisual.Root);
+                }
+
+                DestroyMaterial(_closeBlackHoleVisual.HorizonMaterial);
+                DestroyMaterial(_closeBlackHoleVisual.LensingMaterial);
+                DestroyMaterial(
+                    _closeBlackHoleVisual.AccretionDiskMaterial);
+
+                _closeBlackHoleVisual = null;
+                return;
+            }
+
+            if (_closeBlackHoleVisual.Root != null)
+                _closeBlackHoleVisual.Root.gameObject.SetActive(false);
+        }
+
+        private Material CreateBlackHoleHorizonMaterial(
+            StarData star,
+            int starIndex)
+        {
+            var shader = Shader.Find(
+                "SpaceEngine/Streaming/Black Hole Horizon");
+
+            if (shader == null)
+            {
+                return CreateMaterial(
+                    starMaterial,
+                    Color.black,
+                    enableEmission: false);
+            }
+
+            var material = new Material(shader)
+            {
+                renderQueue = 3110
+            };
+
+            var photonColor = star.HasAccretionDisk
+                ? new Color(1.0f, 0.30f, 0.055f, 1.0f)
+                : new Color(0.07f, 0.12f, 0.20f, 1.0f);
+
+            SetColorIfPresent(material, "_PhotonRingColor", photonColor);
+            SetFloatIfPresent(
+                material,
+                "_PhotonRingIntensity",
+                star.HasAccretionDisk ? 0.72f : 0.08f);
+            SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 43));
+            return material;
+        }
+
+        private Material CreateBlackHoleLensingMaterial(int starIndex)
+        {
+            var shader = Shader.Find(
+                "SpaceEngine/Streaming/Black Hole Lens");
+
+            if (shader == null)
+                return null;
+
+            var material = new Material(shader)
+            {
+                renderQueue = 3100
+            };
+
+            SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 47));
+            SetFloatIfPresent(material, "_LensingStrength", 0.82f);
+            SetFloatIfPresent(material, "_LensViewportRadius", 0.10f);
+            SetFloatIfPresent(material, "_SceneColorAvailable", 0.0f);
+            return material;
+        }
+
+        private Material CreateBlackHoleAccretionDiskMaterial(
+            StarData star,
+            int starIndex,
+            bool detailed)
+        {
+            var shader = Shader.Find(
+                "SpaceEngine/Streaming/Black Hole Accretion Disk");
+
+            if (shader == null)
+            {
+                return CreateMaterial(
+                    coronaMaterial != null
+                        ? coronaMaterial
+                        : starMaterial,
+                    new Color(1.0f, 0.32f, 0.06f, 1.0f),
+                    enableEmission: true);
+            }
+
+            var material = new Material(shader)
+            {
+                renderQueue = detailed ? 3200 : 3000
+            };
+
+            SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 53));
+            SetFloatIfPresent(
+                material,
+                "_RotationSpeed",
+                Mathf.Lerp(
+                    0.34f,
+                    1.25f,
+                    GetSeedValue(starIndex, 59)));
+            SetFloatIfPresent(
+                material,
+                "_Intensity",
+                detailed ? 3.4f : 2.0f);
+            UpdateBlackHoleAccretionDiskMaterial(
+                material,
+                star,
+                starIndex,
+                detailed);
+
+            return material;
+        }
+
+        private void UpdateBlackHoleAccretionDiskMaterial(
+            Material material,
+            StarData star,
+            int starIndex,
+            bool detailed)
+        {
+            if (material == null)
+                return;
+
+            SetFloatIfPresent(
+                material,
+                "_SurfaceTime",
+                (float)_simulationTimeSeconds);
+            SetFloatIfPresent(
+                material,
+                "_Seed",
+                GetSeedValue(starIndex, 53));
+            SetFloatIfPresent(
+                material,
+                "_Intensity",
+                detailed ? 3.4f : 2.0f);
+        }
+
+        private Quaternion GetBlackHoleDiskRotation(int starIndex)
+        {
+            var normal = GetUnitDirection(
+                _loadedSystemSeed,
+                starIndex,
+                97);
+
+            var spin = Mathf.Lerp(
+                0.0f,
+                360.0f,
+                GetSeedValue(starIndex, 101));
+
+            return Quaternion.AngleAxis(spin, normal) *
+                   Quaternion.FromToRotation(Vector3.up, normal);
+        }
+
         private void CreateProminences(
             CloseStarSurfaceVisual visual,
             StarData star,
@@ -5067,6 +5945,12 @@ public sealed class GalaxyStarfieldRenderer
 
             if (star.Lod1LightRenderer != null)
                 star.Lod1LightRenderer.enabled = isVisible;
+
+            if (star.AccretionDiskTransform != null)
+                star.AccretionDiskTransform.gameObject.SetActive(isVisible);
+
+            if (star.AccretionDiskRenderer != null)
+                star.AccretionDiskRenderer.enabled = isVisible;
         }
 
         private static void SetBasePlanetVisualVisible(
@@ -5213,6 +6097,89 @@ public sealed class GalaxyStarfieldRenderer
             SetFloatIfPresent(material, "_FlickerStrength", 0.30f);
 
             return material;
+        }
+
+        private Mesh ResolveBlackHoleAccretionDiskMesh()
+        {
+            if (_runtimeBlackHoleAccretionDiskMesh != null)
+                return _runtimeBlackHoleAccretionDiskMesh;
+
+            const int angularSegments = 160;
+            const int radialSegments = 18;
+
+            var vertexCount = (angularSegments + 1) *
+                              (radialSegments + 1);
+            var vertices = new Vector3[vertexCount];
+            var normals = new Vector3[vertexCount];
+            var uvs = new Vector2[vertexCount];
+
+            for (var radial = 0; radial <= radialSegments; radial++)
+            {
+                var radialFraction = radial / (float)radialSegments;
+                var radius = Mathf.Lerp(
+                    BlackHoleAccretionDiskInnerMeshRadius,
+                    BlackHoleAccretionDiskOuterMeshRadius,
+                    radialFraction * radialFraction);
+
+                for (var angular = 0;
+                     angular <= angularSegments;
+                     angular++)
+                {
+                    var angularFraction =
+                        angular / (float)angularSegments;
+                    var angle = angularFraction * Mathf.PI * 2.0f;
+                    var index = radial * (angularSegments + 1) +
+                                angular;
+
+                    vertices[index] = new Vector3(
+                        Mathf.Cos(angle) * radius,
+                        0.0f,
+                        Mathf.Sin(angle) * radius);
+
+                    normals[index] = Vector3.up;
+                    uvs[index] = new Vector2(
+                        angularFraction,
+                        radialFraction);
+                }
+            }
+
+            var triangles = new int[
+                angularSegments * radialSegments * 6];
+            var triangleIndex = 0;
+
+            for (var radial = 0; radial < radialSegments; radial++)
+            {
+                for (var angular = 0;
+                     angular < angularSegments;
+                     angular++)
+                {
+                    var current = radial * (angularSegments + 1) +
+                                  angular;
+                    var next = current + angularSegments + 1;
+
+                    triangles[triangleIndex++] = current;
+                    triangles[triangleIndex++] = next;
+                    triangles[triangleIndex++] = current + 1;
+
+                    triangles[triangleIndex++] = current + 1;
+                    triangles[triangleIndex++] = next;
+                    triangles[triangleIndex++] = next + 1;
+                }
+            }
+
+            _runtimeBlackHoleAccretionDiskMesh = new Mesh
+            {
+                name = "Runtime Black Hole Accretion Disk",
+                indexFormat = IndexFormat.UInt32
+            };
+
+            _runtimeBlackHoleAccretionDiskMesh.vertices = vertices;
+            _runtimeBlackHoleAccretionDiskMesh.normals = normals;
+            _runtimeBlackHoleAccretionDiskMesh.uv = uvs;
+            _runtimeBlackHoleAccretionDiskMesh.triangles = triangles;
+            _runtimeBlackHoleAccretionDiskMesh.RecalculateBounds();
+
+            return _runtimeBlackHoleAccretionDiskMesh;
         }
 
         private Mesh ResolveCloseStarSurfaceMesh()
@@ -5758,6 +6725,15 @@ public sealed class GalaxyStarfieldRenderer
                 material.SetFloat(propertyName, value);
         }
 
+        private static void SetVectorIfPresent(
+            Material material,
+            string propertyName,
+            Vector4 value)
+        {
+            if (material != null && material.HasProperty(propertyName))
+                material.SetVector(propertyName, value);
+        }
+
         private readonly struct CloseSurfaceColors
         {
             public readonly Color Base;
@@ -5810,6 +6786,7 @@ public sealed class GalaxyStarfieldRenderer
         {
             ClearLod2Renderers();
             DeactivateCloseStarSurfaceLod(destroyVisual: true);
+            DeactivateCloseBlackHoleLod(destroyVisual: true);
 
             for (var i = 0; i < _stars.Count; i++)
             {
@@ -5817,6 +6794,7 @@ public sealed class GalaxyStarfieldRenderer
                 DestroyMaterial(_stars[i].Material);
                 DestroyMaterial(_stars[i].CoronaMaterial);
                 DestroyMaterial(_stars[i].Lod1LightMaterial);
+                DestroyMaterial(_stars[i].AccretionDiskMaterial);
             }
 
             for (var i = 0; i < _planets.Count; i++)
@@ -6517,6 +7495,10 @@ public sealed class GalaxyStarfieldRenderer
 
         private bool _solarSystemLodActive;
         private float _nextProximityCheckTime;
+        private long _anchorPointStyleSolarSystemID = long.MinValue;
+        private bool _hasAnchorPointStyleOverride;
+        private Color _anchorPointStyleColor = Color.white;
+        private float _anchorPointStyleIntensity = 1.5f;
 
         public event Action<CoordinatesData> SolarSystemLodEntered;
         public event Action<CoordinatesData> SolarSystemLodExited;
@@ -6526,12 +7508,16 @@ public sealed class GalaxyStarfieldRenderer
         public void Initialize()
         {
             solarSystemRenderer?.SetScaledSpaceVisible(false);
+            UpdateAnchorStellarPointAppearance();
         }
 
         public void Dispose()
         {
             solarSystemRenderer?.SetScaledSpaceVisible(false);
             SetStellarPointSuppression(false);
+            stellarFieldRenderer?.ClearAnchorSolarSystemLocation();
+            ClearAnchorPointStyleOverride();
+            ApplyAnchorPointStyleOverride();
             _solarSystemLodActive = false;
         }
 
@@ -6584,6 +7570,8 @@ public sealed class GalaxyStarfieldRenderer
         {
             if (spaceAnchor == null || !spaceAnchor.IsConfigured)
                 return;
+
+            UpdateAnchorStellarPointAppearance();
 
             // A CelestialAnchor addresses a concrete solar system directly.
             // It must render near that system even when its opaque ID was not
@@ -6656,6 +7644,8 @@ public sealed class GalaxyStarfieldRenderer
                 solarSystemRenderer.RefreshNow();
             }
 
+            UpdateAnchorStellarPointAppearance();
+
             // Keep LOD 0 visible until the scaled star sphere has reached
             // its configured apparent size. This provides an overlap instead
             // of the former one-frame / tiny-star gap.
@@ -6677,6 +7667,7 @@ public sealed class GalaxyStarfieldRenderer
             if (solarSystemRenderer != null)
                 solarSystemRenderer.SetScaledSpaceVisible(false);
 
+            UpdateAnchorStellarPointAppearance();
             SetStellarPointSuppression(false);
 
             if (!_solarSystemLodActive)
@@ -6688,6 +7679,8 @@ public sealed class GalaxyStarfieldRenderer
 
         private void UpdateStellarPointSuppression()
         {
+            UpdateAnchorStellarPointAppearance();
+
             var canHideStellarPoint =
                 solarSystemRenderer != null &&
                 solarSystemRenderer.IsNearestStarLod1VisibleAt(
@@ -6703,6 +7696,107 @@ public sealed class GalaxyStarfieldRenderer
                 stellarFieldRenderer.SetAnchorSolarSystemPointSuppressed(
                     suppress);
             }
+        }
+
+        private void UpdateAnchorStellarPointAppearance()
+        {
+            if (spaceAnchor == null || !spaceAnchor.IsConfigured)
+            {
+                stellarFieldRenderer?.ClearAnchorSolarSystemLocation();
+                return;
+            }
+
+            // The active system is authoritative even when it came from a
+            // logical gameplay ID rather than a density-sector catalogue.
+            // Feed its resolved location to LOD 0 every evaluation so the
+            // point is always ready before the LOD 1 visual is unloaded.
+            stellarFieldRenderer?.SetAnchorSolarSystemLocation(
+                spaceAnchor.ActiveSolarSystem);
+
+            ResolveAnchorPointStyleOverride();
+            ApplyAnchorPointStyleOverride();
+        }
+
+        private void ResolveAnchorPointStyleOverride()
+        {
+            if (spaceAnchor == null || !spaceAnchor.IsConfigured)
+            {
+                ClearAnchorPointStyleOverride();
+                return;
+            }
+
+            var solarSystemID = spaceAnchor.Coordinates.SolarSystemID;
+            if (_anchorPointStyleSolarSystemID == solarSystemID)
+                return;
+
+            _anchorPointStyleSolarSystemID = solarSystemID;
+            _hasAnchorPointStyleOverride = false;
+            _anchorPointStyleColor = Color.white;
+            _anchorPointStyleIntensity = 1.5f;
+
+            var solarSystem = SolarSystemGenerator.Generate(
+                spaceAnchor.Coordinates);
+
+            if (solarSystem.Stars == null || solarSystem.Stars.Length == 0)
+                return;
+
+            var hasBlackHole = false;
+            var hasAccretionDisk = false;
+            var dominantBlackHoleMassKg = double.NegativeInfinity;
+
+            for (var i = 0; i < solarSystem.Stars.Length; i++)
+            {
+                var star = solarSystem.Stars[i];
+                if (star.Type != StarType.BlackHole ||
+                    star.MassKg <= dominantBlackHoleMassKg)
+                {
+                    continue;
+                }
+
+                hasBlackHole = true;
+                hasAccretionDisk = star.HasAccretionDisk;
+                dominantBlackHoleMassKg = star.MassKg;
+            }
+
+            if (!hasBlackHole)
+                return;
+
+            _hasAnchorPointStyleOverride = true;
+
+            if (hasAccretionDisk)
+            {
+                _anchorPointStyleColor = Color.white;
+                _anchorPointStyleIntensity = 1.35f;
+                return;
+            }
+
+            _anchorPointStyleColor = new Color(0.70f, 0.70f, 0.70f, 1.0f);
+            _anchorPointStyleIntensity = 0.14f;
+        }
+
+        private void ApplyAnchorPointStyleOverride()
+        {
+            if (stellarFieldRenderer == null)
+                return;
+
+            if (_hasAnchorPointStyleOverride)
+            {
+                stellarFieldRenderer.SetAnchorSolarSystemPointOverride(
+                    _anchorPointStyleColor,
+                    _anchorPointStyleIntensity);
+
+                return;
+            }
+
+            stellarFieldRenderer.ClearAnchorSolarSystemPointOverride();
+        }
+
+        private void ClearAnchorPointStyleOverride()
+        {
+            _anchorPointStyleSolarSystemID = long.MinValue;
+            _hasAnchorPointStyleOverride = false;
+            _anchorPointStyleColor = Color.white;
+            _anchorPointStyleIntensity = 1.5f;
         }
     }
 
@@ -6959,6 +8053,7 @@ public sealed class GalaxyStarfieldRenderer
 
             _solarRenderer.Configure(
                 _spaceAnchor,
+                settings.CelestialCamera,
                 settings.CelestialLayer,
                 settings.Lod1MinimumStarAngularDiameterDegrees,
                 settings.MinimumPlanetAngularDiameterDegrees,

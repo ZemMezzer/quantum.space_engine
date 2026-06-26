@@ -603,7 +603,10 @@ namespace SpaceEngine.Runtime.Streaming
             celestialFrameCamera.fieldOfView = playerCamera.fieldOfView;
             celestialFrameCamera.orthographicSize =
                 playerCamera.orthographicSize;
-            celestialFrameCamera.nearClipPlane = 0.001f;
+            // Compact objects use their actual Schwarzschild radius in the
+            // detailed LOD. Keep the celestial near plane below the smallest
+            // generated stellar-mass black-hole horizon.
+            celestialFrameCamera.nearClipPlane = 0.00001f;
             celestialFrameCamera.farClipPlane = celestialFrameFarClipPlane;
             celestialFrameCamera.aspect = playerCamera.aspect;
             celestialFrameCamera.clearFlags = CameraClearFlags.SolidColor;
@@ -674,6 +677,10 @@ namespace SpaceEngine.Runtime.Streaming
                 return;
 
             SetEnumProperty(celestialData, "renderType", "Base");
+            // The detailed black-hole lens samples the celestial camera's
+            // already-rendered colour buffer. URP exposes it only when the
+            // camera's opaque texture override is enabled.
+            SetEnumProperty(celestialData, "requiresColorOption", "On");
             SetEnumProperty(playerData, "renderType", "Overlay");
             SetBooleanProperty(playerData, "clearDepth", true);
 
