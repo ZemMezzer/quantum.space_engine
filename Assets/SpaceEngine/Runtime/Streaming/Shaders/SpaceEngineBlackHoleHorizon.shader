@@ -2,8 +2,10 @@ Shader "SpaceEngine/Streaming/Black Hole Horizon"
 {
     Properties
     {
-        [HDR] _PhotonRingColor ("Photon Ring Color", Color) = (1, 0.32, 0.06, 1)
-        _PhotonRingIntensity ("Photon Ring Intensity", Range(0, 4)) = 0.7
+        [HDR] _PhotonRingColor ("Photon Ring Color", Color) = (0.92, 0.94, 1.0, 1)
+        _PhotonRingIntensity ("Photon Ring Intensity", Range(0, 4)) = 0.16
+        _ApparentShadowScale ("Apparent Shadow Scale", Range(1, 4)) = 2.598
+        _PhotonRingWidth ("Photon Ring Width (Pixels)", Range(0.25, 4)) = 0.85
         _Seed ("Seed", Range(0, 1)) = 0
     }
 
@@ -21,13 +23,10 @@ Shader "SpaceEngine/Streaming/Black Hole Horizon"
             Name "EventHorizon"
             Tags { "LightMode" = "UniversalForward" }
 
-            // The horizon replaces the already-rendered sky with black while
-            // still writing depth so the front half of an accretion disk can
-            // remain visible and the rear half is hidden by the sphere.
             Blend One Zero
             ZWrite On
             ZTest LEqual
-            Cull Off
+            Cull Back
 
             HLSLPROGRAM
             #pragma target 3.5
@@ -39,6 +38,8 @@ Shader "SpaceEngine/Streaming/Black Hole Horizon"
             CBUFFER_START(UnityPerMaterial)
                 half4 _PhotonRingColor;
                 float _PhotonRingIntensity;
+                float _ApparentShadowScale;
+                float _PhotonRingWidth;
                 float _Seed;
             CBUFFER_END
 
@@ -58,34 +59,26 @@ Shader "SpaceEngine/Streaming/Black Hole Horizon"
             Varyings Vert(Attributes input)
             {
                 Varyings output;
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                float3 shadowPositionOS = input.positionOS.xyz * _ApparentShadowScale;
+                output.positionCS = TransformObjectToHClip(shadowPositionOS);
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
-                output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
+                output.positionWS = TransformObjectToWorld(shadowPositionOS);
                 return output;
             }
 
             half4 Frag(Varyings input) : SV_Target
             {
                 float3 normalWS = normalize(input.normalWS);
-                float3 viewDirection = normalize(
-                    _WorldSpaceCameraPos - input.positionWS);
+                float3 viewDirection = normalize(_WorldSpaceCameraPos - input.positionWS);
 
-                // A narrow, optically thin photon ring. This is deliberately
-                // restrained for diskless holes; their actual visible light
-                // comes from the lensed background, not self-emission.
-                float rim = 1.0 - saturate(abs(dot(normalWS, viewDirection)));
-                float photonRing = smoothstep(0.86, 0.995, rim);
-                photonRing = pow(photonRing, 1.35);
+                float silhouette = abs(dot(normalWS, viewDirection));
+                float pixelWidth = max(fwidth(silhouette), 0.00001);
+                float photonRing = 1.0 - smoothstep(
+                    pixelWidth * _PhotonRingWidth,
+                    pixelWidth * (_PhotonRingWidth + 1.10),
+                    silhouette);
 
-                float flicker = 0.96 + 0.04 * sin(
-                    _Seed * 67.0 +
-                    atan2(normalWS.z, normalWS.x) * 9.0);
-
-                float3 ringColor = _PhotonRingColor.rgb *
-                                   photonRing *
-                                   _PhotonRingIntensity *
-                                   flicker;
-
+                float3 ringColor = _PhotonRingColor.rgb * photonRing * _PhotonRingIntensity;
                 return half4(ringColor, 1.0);
             }
             ENDHLSL

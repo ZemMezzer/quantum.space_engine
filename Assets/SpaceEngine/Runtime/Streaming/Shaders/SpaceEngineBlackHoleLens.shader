@@ -2,9 +2,11 @@ Shader "SpaceEngine/Streaming/Black Hole Lens"
 {
     Properties
     {
-        _LensingStrength ("Lensing Strength", Range(0, 2)) = 0.82
-        _LensViewportRadius ("Lens Viewport Radius", Range(0.0001, 2)) = 0.10
+        _LensingStrength ("Lensing Strength", Range(0, 2)) = 1.02
+        _LensViewportRadius ("Lens Viewport Radius", Range(0.0001, 2)) = 0.14
         _LensCenterViewport ("Lens Center Viewport", Vector) = (0.5, 0.5, 0, 0)
+        _ShadowRadiusRatio ("Apparent Shadow Radius Ratio", Range(0.02, 0.50)) = 0.2165
+        _LensEdgeSoftness ("Lens Edge Softness", Range(0.01, 0.50)) = 0.24
         _Seed ("Seed", Range(0, 1)) = 0
         _SurfaceTime ("Surface Time", Float) = 0
         [HideInInspector] _SceneColorAvailable ("Scene Color Available", Float) = 0
@@ -24,13 +26,10 @@ Shader "SpaceEngine/Streaming/Black Hole Lens"
             Name "GravitationalLensing"
             Tags { "LightMode" = "UniversalForward" }
 
-            // The shell samples and replaces the celestial camera's previous
-            // colour at the same pixel. It intentionally does not contribute
-            // depth: it is an optical region, not solid matter.
             Blend SrcAlpha OneMinusSrcAlpha
             ZWrite Off
             ZTest Always
-            Cull Off
+            Cull Back
 
             HLSLPROGRAM
             #pragma target 3.5
@@ -44,6 +43,8 @@ Shader "SpaceEngine/Streaming/Black Hole Lens"
                 float _LensingStrength;
                 float _LensViewportRadius;
                 float4 _LensCenterViewport;
+                float _ShadowRadiusRatio;
+                float _LensEdgeSoftness;
                 float _Seed;
                 float _SurfaceTime;
                 float _SceneColorAvailable;
@@ -68,61 +69,54 @@ Shader "SpaceEngine/Streaming/Black Hole Lens"
 
             half4 Frag(Varyings input) : SV_Target
             {
-                float2 screenUv = input.positionCS.xy /
-                                  _ScaledScreenParams.xy;
+                float2 screenUv = input.positionCS.xy / _ScaledScreenParams.xy;
                 float2 centre = _LensCenterViewport.xy;
-                float2 offset = screenUv - centre;
-                float radialDistance = length(offset);
-                float lensRadius = max(_LensViewportRadius, 0.0001);
+
+                float aspect = _ScaledScreenParams.x / max(_ScaledScreenParams.y, 1.0);
+                float2 aspectScale = float2(aspect, 1.0);
+                float2 localOffset = (screenUv - centre) * aspectScale;
+
+                float lensRadius = max(_LensViewportRadius * aspect, 0.000001);
+                float radialDistance = length(localOffset);
                 float normalizedRadius = radialDistance / lensRadius;
+
+                if (normalizedRadius >= 1.0)
+                    return half4(0.0, 0.0, 0.0, 0.0);
+
                 float2 radialDirection = radialDistance > 0.000001
-                    ? offset / radialDistance
+                    ? localOffset / radialDistance
                     : float2(1.0, 0.0);
+                float2 tangentDirection = float2(-radialDirection.y, radialDirection.x);
 
-                // A camera ray close to the shadow samples light from farther
-                // out in the background. The falloff leaves the outer shell
-                // continuous with the unbent celestial sky.
-                float shellFade = 1.0 - smoothstep(
-                    0.64,
-                    1.06,
-                    normalizedRadius);
+                float shadowRadius = max(lensRadius * _ShadowRadiusRatio, 0.000001);
+                float impact = max(radialDistance / shadowRadius, 1.0001);
+                float captureProximity = 1.0 / max(impact - 1.0, 0.030);
 
-                float nearHorizon = pow(
-                    saturate(1.0 - normalizedRadius),
-                    1.65);
+                float weakDeflection = 0.55 / (impact * impact + 0.08);
+                float criticalDeflection = 0.62 * log(1.0 + captureProximity);
+                float ringCompression = 0.12 / (impact * impact * impact + 0.10);
 
-                float radialOffset = lensRadius *
-                                     _LensingStrength *
-                                     (0.08 + 0.42 * nearHorizon) *
-                                     shellFade;
+                float deflection = shadowRadius * _LensingStrength *
+                                   (weakDeflection + criticalDeflection + ringCompression);
+                deflection = min(deflection, shadowRadius * 5.0);
 
-                float2 lensedUv = centre +
-                                  radialDirection *
-                                  (radialDistance + radialOffset);
+                float tangentialTwist = shadowRadius * 0.52 *
+                                        exp(-pow(max(impact - 1.28, 0.0) / 0.52, 2.0));
 
-                float3 originalColour = SampleSceneColor(screenUv);
-                float3 lensedColour = SampleSceneColor(
-                    saturate(lensedUv));
+                float2 sourceLocal = radialDirection * (radialDistance + deflection) +
+                                     tangentDirection * tangentialTwist;
+                float2 lensedUv = centre + sourceLocal / aspectScale;
 
-                float blendAmount = shellFade *
-                                    (0.25 + 0.75 * nearHorizon);
+                float3 lensedColour = SampleSceneColor(saturate(lensedUv));
 
-                // The weak high-frequency term prevents the lens edge from
-                // becoming a mathematically perfect CG circle without adding
-                // visible animated noise.
-                float edgeBreakup = 0.985 + 0.015 * sin(
-                    atan2(offset.y, offset.x) * 13.0 +
-                    _Seed * 37.0);
+                float edgeStart = saturate(1.0 - _LensEdgeSoftness);
+                float edgeFade = 1.0 - smoothstep(edgeStart, 1.0, normalizedRadius);
 
-                blendAmount *= edgeBreakup;
+                float ringZone = exp(-pow((impact - 1.45) / 0.52, 2.0));
+                float innerZone = exp(-pow((impact - 1.05) / 0.18, 2.0));
+                float blendAmount = edgeFade * saturate(0.12 + ringZone * 0.68 + innerZone * 0.42);
 
-                // Alpha blending keeps the shell harmless on renderers
-                // that do not expose a camera opaque texture. In URP the
-                // camera setting is enabled by CelestialRenderer3D and the
-                // lensed scene colour replaces the original at full alpha.
-                return half4(
-                    lensedColour,
-                    saturate(blendAmount * _SceneColorAvailable));
+                return half4(lensedColour, saturate(blendAmount * _SceneColorAvailable));
             }
             ENDHLSL
         }
