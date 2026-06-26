@@ -1,12 +1,12 @@
-Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
+Shader "SpaceEngine/Streaming/Volumetric Black Hole Accretion Disk"
 {
     Properties
     {
-        _Intensity ("Intensity", Range(0, 12)) = 1.8
+        _Intensity ("Intensity", Range(0, 12)) = 2.2
         _RotationSpeed ("Rotation Speed", Range(0, 4)) = 0.8
         _DiskInnerRadius ("Disk Inner Radius", Range(0.1, 5)) = 1.2
         _DiskOuterRadius ("Disk Outer Radius", Range(2, 20)) = 12.0
-        _DiskThickness ("Disk Half Thickness", Range(0.05, 3)) = 0.5
+        _DiskThickness ("Disk Half Thickness", Range(0.05, 3)) = 0.65
         _DiskFlare ("Disk Flare", Range(0, 2)) = 0.8
         _WarpStrength ("Warp Strength", Range(0, 2)) = 0.2
         _WarpFrequency ("Warp Frequency", Range(1, 5)) = 2.0
@@ -33,9 +33,12 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
 
         Pass
         {
-            Name "AccretionDiskProxy"
+            Name "VolumetricAccretionDisk"
             Tags { "LightMode" = "UniversalForward" }
 
+            // The mesh contains several thin gas sheets. Additive blending
+            // lets their overlapping density read as a continuous luminous
+            // volume without storing or ray marching a heavy 3D texture.
             Blend One One
             ZWrite Off
             ZTest LEqual
@@ -72,8 +75,8 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
             struct Attributes
             {
                 float4 positionOS : POSITION;
-                float3 normalOS : NORMAL;
                 float2 uv : TEXCOORD0;
+                float2 volumeUv : TEXCOORD1;
             };
 
             struct Varyings
@@ -83,7 +86,8 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                 float3 tangentWS : TEXCOORD1;
                 float3 diskNormalWS : TEXCOORD2;
                 float radialDistance : TEXCOORD3;
-                float2 uv : TEXCOORD4;
+                float verticalFraction : TEXCOORD4;
+                float2 uv : TEXCOORD5;
             };
 
             float Hash21(float2 p)
@@ -135,13 +139,32 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                 float radial01 = saturate(
                     (radialDistance - _DiskInnerRadius) /
                     max(_DiskOuterRadius - _DiskInnerRadius, 0.0001));
+                float verticalFraction = input.volumeUv.x;
 
+                float flare = lerp(0.32, 1.0, radial01) * _DiskFlare;
                 float warp = sin(
                     angle * _WarpFrequency +
                     radial01 * 7.0 +
                     _Seed * 18.0) *
                     _WarpStrength * radial01 * radial01;
-                positionOS.y += warp;
+                float secondaryWarp = sin(
+                    angle * (_WarpFrequency + 1.0) -
+                    radial01 * 11.0 +
+                    _Seed * 33.0) *
+                    _WarpStrength * 0.20 * radial01;
+
+                float radialWobble = sin(
+                    angle * (3.0 + _WarpFrequency) +
+                    radial01 * 14.0 +
+                    _Seed * 49.0) *
+                    _SpiralStrength * 0.035 * radial01;
+
+                positionOS.xz *= 1.0 + radialWobble;
+                positionOS.y = verticalFraction *
+                               _DiskThickness *
+                               flare +
+                               warp +
+                               secondaryWarp;
 
                 float3 tangentOS = normalize(float3(
                     -positionOS.z,
@@ -154,6 +177,7 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                 output.diskNormalWS = TransformObjectToWorldDir(
                     float3(0.0, 1.0, 0.0));
                 output.radialDistance = radialDistance;
+                output.verticalFraction = verticalFraction;
                 output.uv = input.uv;
                 return output;
             }
@@ -171,28 +195,31 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                     max(_DiskOuterRadius - _DiskInnerRadius, 0.0001));
                 float angle = input.uv.x * 6.28318530718;
                 float time = _SurfaceTime * _RotationSpeed;
-                float angularFlow = angle + time / (0.14 + radial * 1.52);
+                float angularFlow = angle + time / (0.12 + radial * 1.52);
 
                 float broadTurbulence = Fbm(float2(
-                    angularFlow * 7.4 * _TurbulenceScale,
-                    radial * 13.0 + _Seed * 19.0));
+                    angularFlow * 7.2 * _TurbulenceScale,
+                    radial * 12.5 + _Seed * 19.0));
                 float fineTurbulence = Fbm(float2(
-                    angularFlow * 24.0 * _TurbulenceScale + time * 0.28,
-                    radial * 43.0 + _Seed * 53.0));
+                    angularFlow * 25.0 * _TurbulenceScale + time * 0.31,
+                    radial * 46.0 + _Seed * 53.0));
 
                 float filaments = smoothstep(
-                    0.30,
+                    0.27,
                     0.80,
-                    broadTurbulence * 0.72 + fineTurbulence * 0.52);
-                float spiralBands = 0.58 + 0.42 * sin(
-                    angularFlow * (11.0 + radial * 8.0) -
-                    radial * 25.0 +
-                    fineTurbulence * 3.2);
+                    broadTurbulence * 0.72 + fineTurbulence * 0.53);
+                float spiralBands = 0.56 + 0.44 * sin(
+                    angularFlow * (10.0 + radial * 9.0) -
+                    radial * 28.0 +
+                    fineTurbulence * 3.8);
                 spiralBands = lerp(1.0, spiralBands, _SpiralStrength);
 
-                float innerHeat = pow(1.0 - radial, 0.58);
+                float innerHeat = pow(1.0 - radial, 0.55);
                 float outerFalloff = 1.0 - smoothstep(0.82, 1.0, radial);
                 float innerFalloff = smoothstep(0.0, 0.055, radial);
+                float verticalDensity = exp(-
+                    input.verticalFraction * input.verticalFraction *
+                    lerp(1.75, 4.80, radial));
 
                 float3 colour = lerp(
                     _OuterColor.rgb,
@@ -204,7 +231,7 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                     smoothstep(0.50, 1.0, innerHeat));
 
                 float dustAmount = radial * radial *
-                                   (0.26 + 0.34 * fineTurbulence);
+                                   (0.20 + 0.42 * fineTurbulence);
                 colour = lerp(colour, _DustColor.rgb, dustAmount);
 
                 float3 viewDirection = normalize(
@@ -212,8 +239,8 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                 float approaching = saturate(
                     dot(normalize(input.tangentWS), viewDirection) *
                     0.5 + 0.5);
-                float3 recedingTint = float3(0.72, 0.22, 0.13);
-                float3 approachingTint = float3(1.16, 1.30, 1.52);
+                float3 recedingTint = float3(0.66, 0.20, 0.12);
+                float3 approachingTint = float3(1.18, 1.34, 1.62);
                 colour *= lerp(
                     recedingTint,
                     approachingTint,
@@ -222,15 +249,18 @@ Shader "SpaceEngine/Streaming/Black Hole Accretion Disk"
                 float edgeOn = 1.0 - abs(dot(
                     normalize(input.diskNormalWS),
                     viewDirection));
+                float layerWeight = 0.11 + verticalDensity * 0.12;
                 float brightness =
                     (0.20 + 0.80 * filaments) *
-                    (0.58 + 0.42 * spiralBands) *
-                    (0.30 + 1.08 * innerHeat) *
+                    (0.56 + 0.44 * spiralBands) *
+                    (0.28 + 1.12 * innerHeat) *
                     outerFalloff *
                     innerFalloff *
+                    verticalDensity *
+                    layerWeight *
                     _VolumeDensity *
                     _Intensity;
-                brightness *= lerp(0.78, 1.36, edgeOn);
+                brightness *= lerp(0.76, 1.62, edgeOn);
 
                 return half4(colour * brightness, 1.0);
             }

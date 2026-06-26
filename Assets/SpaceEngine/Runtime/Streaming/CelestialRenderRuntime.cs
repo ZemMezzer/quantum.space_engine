@@ -3757,12 +3757,14 @@ public sealed class GalaxyStarfieldRenderer
     /// </summary>
     public sealed class SolarSystemScaledSpaceRenderer
     {
-        // The accretion-disk mesh is authored around a unit sphere whose
-        // transform has a diameter of two physical horizon radii. Keeping the
-        // outer mesh radius here lets the LOD 1 disk use a screen-size floor
-        // without inflating the event horizon itself.
-        private const float BlackHoleAccretionDiskInnerMeshRadius = 1.55f;
-        private const float BlackHoleAccretionDiskOuterMeshRadius = 8.75f;
+        // Accretion-disk meshes are authored around a unit sphere whose root
+        // transform has a diameter of two physical horizon radii. The proxy
+        // mesh is deliberately cheap; the local mesh is a stack of gas sheets
+        // with genuine thickness, so a player can orbit the disk in 3D.
+        private const float BlackHoleAccretionDiskInnerMeshRadius = 1.20f;
+        private const float BlackHoleAccretionDiskOuterMeshRadius = 20.0f;
+        private const float BlackHoleAccretionDiskMaximumHalfHeight = 2.80f;
+        private const double SolarMassKilograms = 1.98847e30;
 
         public readonly struct StarProximityData
         {
@@ -3839,6 +3841,71 @@ public sealed class GalaxyStarfieldRenderer
             public Material HorizonMaterial;
             public Material LensingMaterial;
             public Material AccretionDiskMaterial;
+        }
+
+        /// <summary>
+        /// Deterministic visual parameters for gas falling into a black hole.
+        /// The simulation does not need a second random stream: composition,
+        /// density and geometry are derived from the generated black-hole mass,
+        /// age, metallicity and the stable system seed.
+        /// </summary>
+        private readonly struct BlackHoleAccretionDiskProfile
+        {
+            public readonly float InnerRadius;
+            public readonly float OuterRadius;
+            public readonly float Thickness;
+            public readonly float Flare;
+            public readonly float WarpStrength;
+            public readonly float WarpFrequency;
+            public readonly float SpiralStrength;
+            public readonly float TurbulenceScale;
+            public readonly float Density;
+            public readonly float DopplerStrength;
+            public readonly float RotationSpeed;
+            public readonly float ProxyIntensity;
+            public readonly float LocalIntensity;
+            public readonly Color InnerColor;
+            public readonly Color MiddleColor;
+            public readonly Color OuterColor;
+            public readonly Color DustColor;
+
+            public BlackHoleAccretionDiskProfile(
+                float innerRadius,
+                float outerRadius,
+                float thickness,
+                float flare,
+                float warpStrength,
+                float warpFrequency,
+                float spiralStrength,
+                float turbulenceScale,
+                float density,
+                float dopplerStrength,
+                float rotationSpeed,
+                float proxyIntensity,
+                float localIntensity,
+                Color innerColor,
+                Color middleColor,
+                Color outerColor,
+                Color dustColor)
+            {
+                InnerRadius = innerRadius;
+                OuterRadius = outerRadius;
+                Thickness = thickness;
+                Flare = flare;
+                WarpStrength = warpStrength;
+                WarpFrequency = warpFrequency;
+                SpiralStrength = spiralStrength;
+                TurbulenceScale = turbulenceScale;
+                Density = density;
+                DopplerStrength = dopplerStrength;
+                RotationSpeed = rotationSpeed;
+                ProxyIntensity = proxyIntensity;
+                LocalIntensity = localIntensity;
+                InnerColor = innerColor;
+                MiddleColor = middleColor;
+                OuterColor = outerColor;
+                DustColor = dustColor;
+            }
         }
 
         private sealed class PlanetVisual
@@ -3981,6 +4048,7 @@ public sealed class GalaxyStarfieldRenderer
         private Mesh _runtimeLod1LightQuadMesh;
         private Mesh _runtimeCloseStarSurfaceMesh;
         private Mesh _runtimeBlackHoleAccretionDiskMesh;
+        private Mesh _runtimeBlackHoleAccretionVolumeMesh;
         private CloseStarSurfaceVisual _closeStarSurfaceVisual;
         private CloseBlackHoleVisual _closeBlackHoleVisual;
 
@@ -4145,6 +4213,9 @@ public sealed class GalaxyStarfieldRenderer
 
             if (_runtimeBlackHoleAccretionDiskMesh != null)
                 UnityEngine.Object.Destroy(_runtimeBlackHoleAccretionDiskMesh);
+
+            if (_runtimeBlackHoleAccretionVolumeMesh != null)
+                UnityEngine.Object.Destroy(_runtimeBlackHoleAccretionVolumeMesh);
         }
 
         public void SetScaledSpaceVisible(bool isVisible)
@@ -4234,6 +4305,7 @@ public sealed class GalaxyStarfieldRenderer
 
             var renderedRadius = GetStarLod1VisibilityRadiusMeters(
                 nearestStar.Data,
+                proximity.StarIndex,
                 proximity.DistanceToCentreMeters);
 
             return GetAngularDiameterDegrees(
@@ -4391,6 +4463,7 @@ public sealed class GalaxyStarfieldRenderer
         {
             UpdateBlackHoleProxyDiskScale(
                 visual,
+                starIndex,
                 distanceToCentreMeters);
 
             if (visual.AccretionDiskMaterial == null)
@@ -4617,6 +4690,7 @@ public sealed class GalaxyStarfieldRenderer
         /// </summary>
         private double GetStarLod1VisibilityRadiusMeters(
             StarData star,
+            int starIndex,
             double distanceToCentreMeters)
         {
             if (star.Type != StarType.BlackHole)
@@ -4633,7 +4707,8 @@ public sealed class GalaxyStarfieldRenderer
             }
 
             return GetBlackHoleLod1DiskOuterRadiusMeters(
-                star.RadiusMeters,
+                star,
+                starIndex,
                 distanceToCentreMeters);
         }
 
@@ -4650,12 +4725,14 @@ public sealed class GalaxyStarfieldRenderer
         }
 
         private double GetBlackHoleLod1DiskOuterRadiusMeters(
-            double physicalHorizonRadiusMeters,
+            StarData star,
+            int starIndex,
             double distanceToCentreMeters)
         {
             var physicalDiskOuterRadius =
                 GetBlackHolePhysicalDiskOuterRadiusMeters(
-                    physicalHorizonRadiusMeters);
+                    star,
+                    starIndex);
 
             var minimumVisibleDiskOuterRadius =
                 GetMinimumAngularRadiusMeters(
@@ -4667,20 +4744,28 @@ public sealed class GalaxyStarfieldRenderer
                 minimumVisibleDiskOuterRadius);
         }
 
-        private static double GetBlackHolePhysicalDiskOuterRadiusMeters(
-            double physicalHorizonRadiusMeters)
+        private double GetBlackHolePhysicalDiskOuterRadiusMeters(
+            StarData star,
+            int starIndex)
         {
             // The root transform represents a sphere with a local radius of
-            // 0.5, while the disk mesh is authored in root-local units.
+            // 0.5, while the disk mesh is authored in root-local units. Each
+            // gas profile has its own physical outer edge, so a compact blue
+            // disk and a wide dusty red disk no longer share one silhouette.
+            var profile = GetBlackHoleAccretionDiskProfile(
+                star,
+                starIndex);
+
             return Math.Max(
                 0.0,
-                physicalHorizonRadiusMeters *
+                star.RadiusMeters *
                 2.0 *
-                BlackHoleAccretionDiskOuterMeshRadius);
+                profile.OuterRadius);
         }
 
         private void UpdateBlackHoleProxyDiskScale(
             StarVisual visual,
+            int starIndex,
             double distanceToCentreMeters)
         {
             if (visual == null ||
@@ -4691,7 +4776,8 @@ public sealed class GalaxyStarfieldRenderer
 
             var physicalDiskOuterRadius =
                 GetBlackHolePhysicalDiskOuterRadiusMeters(
-                    visual.Data.RadiusMeters);
+                    visual.Data,
+                    starIndex);
 
             if (physicalDiskOuterRadius <= 0.0)
             {
@@ -4701,7 +4787,8 @@ public sealed class GalaxyStarfieldRenderer
 
             var targetDiskOuterRadius =
                 GetBlackHoleLod1DiskOuterRadiusMeters(
-                    visual.Data.RadiusMeters,
+                    visual.Data,
+                    starIndex,
                     distanceToCentreMeters);
 
             var scale = (float)Math.Max(
@@ -5503,11 +5590,16 @@ public sealed class GalaxyStarfieldRenderer
             visual.LensingShellRenderer = lensingRenderer;
             visual.LensingMaterial = CreateBlackHoleLensingMaterial(starIndex);
             lensingRenderer.sharedMaterial = visual.LensingMaterial;
+
+            // Every black hole keeps the same physical lensing shell. The
+            // accretion disk is no longer a camera-facing composite: systems
+            // with gas receive an actual thick, rotating volume that can be
+            // approached from above, below or along the disk plane.
             lensingObject.SetActive(visual.LensingMaterial != null);
 
             if (star.Data.HasAccretionDisk)
             {
-                var diskObject = new GameObject("Accretion Disk")
+                var diskObject = new GameObject("Volumetric Accretion Disk")
                 {
                     layer = layer
                 };
@@ -5515,11 +5607,12 @@ public sealed class GalaxyStarfieldRenderer
                 var diskTransform = diskObject.transform;
                 diskTransform.SetParent(root, false);
                 diskTransform.localPosition = Vector3.zero;
-                diskTransform.localRotation = GetBlackHoleDiskRotation(starIndex);
+                diskTransform.localRotation = GetBlackHoleDiskRotation(
+                    starIndex);
                 diskTransform.localScale = Vector3.one;
 
                 diskObject.AddComponent<MeshFilter>().sharedMesh =
-                    ResolveBlackHoleAccretionDiskMesh();
+                    ResolveBlackHoleAccretionVolumeMesh();
 
                 var diskRenderer = diskObject.AddComponent<MeshRenderer>();
                 diskRenderer.shadowCastingMode = ShadowCastingMode.Off;
@@ -5534,6 +5627,7 @@ public sealed class GalaxyStarfieldRenderer
                         detailed: true);
 
                 diskRenderer.sharedMaterial = visual.AccretionDiskMaterial;
+                diskObject.SetActive(visual.AccretionDiskMaterial != null);
             }
 
             _closeBlackHoleVisual = visual;
@@ -5551,20 +5645,22 @@ public sealed class GalaxyStarfieldRenderer
 
             var hasDisk = star.HasAccretionDisk;
             var time = (float)_simulationTimeSeconds;
-            var photonColor = hasDisk
-                ? new Color(1.0f, 0.30f, 0.055f, 1.0f)
-                : new Color(0.07f, 0.12f, 0.20f, 1.0f);
 
             if (visual.HorizonMaterial != null)
             {
+                // Volumetric disk systems do not need the old standalone
+                // photon ring. Their hot inner gas supplies the local glow
+                // while the horizon remains a clean central shadow.
                 SetColorIfPresent(
                     visual.HorizonMaterial,
                     "_PhotonRingColor",
-                    photonColor);
+                    hasDisk
+                        ? Color.black
+                        : new Color(0.07f, 0.12f, 0.20f, 1.0f));
                 SetFloatIfPresent(
                     visual.HorizonMaterial,
                     "_PhotonRingIntensity",
-                    hasDisk ? 0.72f : 0.08f);
+                    hasDisk ? 0.0f : 0.08f);
             }
 
             if (visual.LensingMaterial != null)
@@ -5576,7 +5672,7 @@ public sealed class GalaxyStarfieldRenderer
                 SetFloatIfPresent(
                     visual.LensingMaterial,
                     "_LensingStrength",
-                    hasDisk ? 0.86f : 0.74f);
+                    0.74f);
                 SetFloatIfPresent(
                     visual.LensingMaterial,
                     "_SceneColorAvailable",
@@ -5587,11 +5683,111 @@ public sealed class GalaxyStarfieldRenderer
                 UpdateBlackHoleLensingScreenData(visual);
             }
 
-            UpdateBlackHoleAccretionDiskMaterial(
+            if (hasDisk)
+            {
+                UpdateBlackHoleAccretionDiskMaterial(
+                    visual.AccretionDiskMaterial,
+                    star,
+                    starIndex,
+                    detailed: true);
+            }
+        }
+
+        private void UpdateBlackHoleAccretionLensMaterial(
+            Material material,
+            int starIndex,
+            float time)
+        {
+            if (material == null)
+                return;
+
+            SetFloatIfPresent(material, "_SurfaceTime", time);
+            SetFloatIfPresent(
+                material,
+                "_Seed",
+                GetSeedValue(starIndex, 53));
+            SetFloatIfPresent(material, "_LensingStrength", 0.95f);
+            SetFloatIfPresent(material, "_DiskIntensity", 4.2f);
+            SetFloatIfPresent(
+                material,
+                "_SceneColorAvailable",
+                Shader.GetGlobalTexture("_CameraOpaqueTexture") != null
+                    ? 1.0f
+                    : 0.0f);
+        }
+
+        private void UpdateBlackHoleAccretionLensTransform(
+            CloseBlackHoleVisual visual)
+        {
+            if (visual == null ||
+                visual.AccretionDiskTransform == null)
+            {
+                return;
+            }
+
+            var camera = celestialCamera != null
+                ? celestialCamera
+                : Camera.main;
+
+            if (camera == null)
+                return;
+
+            // The lensed image is an optical projection. It remains edge-on
+            // in camera space instead of inheriting a random physical disk
+            // inclination, which keeps the characteristic reference profile.
+            visual.AccretionDiskTransform.rotation =
+                camera.transform.rotation;
+        }
+
+        private void UpdateBlackHoleAccretionLensScreenData(
+            CloseBlackHoleVisual visual)
+        {
+            if (visual == null ||
+                visual.Root == null ||
+                visual.AccretionDiskTransform == null ||
+                visual.AccretionDiskMaterial == null)
+            {
+                return;
+            }
+
+            var camera = celestialCamera != null
+                ? celestialCamera
+                : Camera.main;
+
+            if (camera == null)
+                return;
+
+            var centre = camera.WorldToViewportPoint(visual.Root.position);
+
+            if (centre.z <= 0.0f)
+                return;
+
+            var effectWorldRadius =
+                visual.AccretionDiskTransform.lossyScale.x * 0.5f;
+
+            var edge = camera.WorldToViewportPoint(
+                visual.Root.position +
+                camera.transform.right * effectWorldRadius);
+
+            var viewportRadius = Mathf.Abs(edge.x - centre.x);
+
+            if (viewportRadius <= 0.00001f)
+            {
+                var verticalEdge = camera.WorldToViewportPoint(
+                    visual.Root.position +
+                    camera.transform.up * effectWorldRadius);
+
+                viewportRadius = Mathf.Abs(verticalEdge.y - centre.y);
+            }
+
+            SetVectorIfPresent(
                 visual.AccretionDiskMaterial,
-                star,
-                starIndex,
-                detailed: true);
+                "_LensCenterViewport",
+                new Vector4(centre.x, centre.y, 0.0f, 0.0f));
+            SetFloatIfPresent(
+                visual.AccretionDiskMaterial,
+                "_LensViewportRadius",
+                Mathf.Clamp(viewportRadius, 0.0001f, 2.0f));
         }
 
         private void UpdateBlackHoleLensingScreenData(
@@ -5705,14 +5901,14 @@ public sealed class GalaxyStarfieldRenderer
             };
 
             var photonColor = star.HasAccretionDisk
-                ? new Color(1.0f, 0.30f, 0.055f, 1.0f)
+                ? Color.black
                 : new Color(0.07f, 0.12f, 0.20f, 1.0f);
 
             SetColorIfPresent(material, "_PhotonRingColor", photonColor);
             SetFloatIfPresent(
                 material,
                 "_PhotonRingIntensity",
-                star.HasAccretionDisk ? 0.72f : 0.08f);
+                star.HasAccretionDisk ? 0.0f : 0.08f);
             SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 43));
             return material;
         }
@@ -5737,13 +5933,40 @@ public sealed class GalaxyStarfieldRenderer
             return material;
         }
 
+        private Material CreateBlackHoleAccretionLensMaterial(
+            int starIndex)
+        {
+            var shader = Shader.Find(
+                "SpaceEngine/Streaming/Black Hole Accretion Lens");
+
+            if (shader == null)
+                return null;
+
+            var material = new Material(shader)
+            {
+                // Draw after the old bare-hole lens but before the horizon.
+                // The horizon therefore occludes the centre of the disk with
+                // its real depth silhouette.
+                renderQueue = 3105
+            };
+
+            SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 53));
+            SetFloatIfPresent(material, "_LensingStrength", 0.95f);
+            SetFloatIfPresent(material, "_DiskIntensity", 4.2f);
+            SetFloatIfPresent(material, "_LensViewportRadius", 0.10f);
+            SetFloatIfPresent(material, "_SceneColorAvailable", 0.0f);
+            return material;
+        }
+
         private Material CreateBlackHoleAccretionDiskMaterial(
             StarData star,
             int starIndex,
             bool detailed)
         {
             var shader = Shader.Find(
-                "SpaceEngine/Streaming/Black Hole Accretion Disk");
+                detailed
+                    ? "SpaceEngine/Streaming/Volumetric Black Hole Accretion Disk"
+                    : "SpaceEngine/Streaming/Black Hole Accretion Disk");
 
             if (shader == null)
             {
@@ -5760,18 +5983,11 @@ public sealed class GalaxyStarfieldRenderer
                 renderQueue = detailed ? 3200 : 3000
             };
 
-            SetFloatIfPresent(material, "_Seed", GetSeedValue(starIndex, 53));
-            SetFloatIfPresent(
+            ApplyBlackHoleAccretionDiskProfile(
                 material,
-                "_RotationSpeed",
-                Mathf.Lerp(
-                    0.34f,
-                    1.25f,
-                    GetSeedValue(starIndex, 59)));
-            SetFloatIfPresent(
-                material,
-                "_Intensity",
-                detailed ? 3.4f : 2.0f);
+                star,
+                starIndex,
+                detailed);
             UpdateBlackHoleAccretionDiskMaterial(
                 material,
                 star,
@@ -5798,10 +6014,191 @@ public sealed class GalaxyStarfieldRenderer
                 material,
                 "_Seed",
                 GetSeedValue(starIndex, 53));
+
+            ApplyBlackHoleAccretionDiskProfile(
+                material,
+                star,
+                starIndex,
+                detailed);
+        }
+
+        private void ApplyBlackHoleAccretionDiskProfile(
+            Material material,
+            StarData star,
+            int starIndex,
+            bool detailed)
+        {
+            if (material == null)
+                return;
+
+            var profile = GetBlackHoleAccretionDiskProfile(
+                star,
+                starIndex);
+
+            SetFloatIfPresent(material, "_RotationSpeed", profile.RotationSpeed);
             SetFloatIfPresent(
                 material,
                 "_Intensity",
-                detailed ? 3.4f : 2.0f);
+                detailed
+                    ? profile.LocalIntensity
+                    : profile.ProxyIntensity);
+            SetFloatIfPresent(material, "_DiskInnerRadius", profile.InnerRadius);
+            SetFloatIfPresent(material, "_DiskOuterRadius", profile.OuterRadius);
+            SetFloatIfPresent(material, "_DiskThickness", profile.Thickness);
+            SetFloatIfPresent(material, "_DiskFlare", profile.Flare);
+            SetFloatIfPresent(material, "_WarpStrength", profile.WarpStrength);
+            SetFloatIfPresent(material, "_WarpFrequency", profile.WarpFrequency);
+            SetFloatIfPresent(material, "_SpiralStrength", profile.SpiralStrength);
+            SetFloatIfPresent(material, "_TurbulenceScale", profile.TurbulenceScale);
+            SetFloatIfPresent(material, "_VolumeDensity", profile.Density);
+            SetFloatIfPresent(material, "_DopplerStrength", profile.DopplerStrength);
+            SetColorIfPresent(material, "_InnerColor", profile.InnerColor);
+            SetColorIfPresent(material, "_MiddleColor", profile.MiddleColor);
+            SetColorIfPresent(material, "_OuterColor", profile.OuterColor);
+            SetColorIfPresent(material, "_DustColor", profile.DustColor);
+        }
+
+        private BlackHoleAccretionDiskProfile
+            GetBlackHoleAccretionDiskProfile(
+                StarData star,
+                int starIndex)
+        {
+            var massSolar = Mathf.Clamp(
+                (float)(star.MassKg / SolarMassKilograms),
+                3.0f,
+                30.0f);
+            var massFraction = Mathf.InverseLerp(
+                3.0f,
+                30.0f,
+                massSolar);
+            var metallicity = Mathf.InverseLerp(
+                0.01f,
+                1.50f,
+                Mathf.Clamp((float)star.Metallicity, 0.01f, 1.50f));
+            var ageFraction = Mathf.InverseLerp(
+                10_000_000.0f,
+                13_500_000_000.0f,
+                Mathf.Clamp(
+                    (float)star.AgeYears,
+                    10_000_000.0f,
+                    13_500_000_000.0f));
+
+            var gasSeed = GetSeedValue(starIndex, 131);
+            var shapeSeed = GetSeedValue(starIndex, 137);
+            var densitySeed = GetSeedValue(starIndex, 139);
+            var warpSeed = GetSeedValue(starIndex, 149);
+
+            var outerRadius = Mathf.Lerp(7.0f, 17.8f, shapeSeed);
+            outerRadius *= Mathf.Lerp(0.88f, 1.18f, massFraction);
+            outerRadius *= Mathf.Lerp(1.08f, 0.90f, ageFraction);
+            outerRadius = Mathf.Clamp(
+                outerRadius,
+                6.0f,
+                BlackHoleAccretionDiskOuterMeshRadius * 0.96f);
+
+            var innerRadius = Mathf.Lerp(
+                1.20f,
+                2.20f,
+                Mathf.Lerp(massFraction, densitySeed, 0.34f));
+            innerRadius = Mathf.Min(
+                innerRadius,
+                outerRadius * 0.30f);
+
+            var thickness = Mathf.Lerp(0.22f, 1.18f, densitySeed);
+            thickness *= Mathf.Lerp(0.85f, 1.20f, metallicity);
+            thickness = Mathf.Clamp(
+                thickness,
+                0.16f,
+                BlackHoleAccretionDiskMaximumHalfHeight * 0.76f);
+
+            var flare = Mathf.Lerp(0.54f, 1.36f, shapeSeed);
+            var warpStrength = Mathf.Lerp(0.04f, 0.68f, warpSeed);
+            warpStrength *= Mathf.Lerp(0.65f, 1.18f, metallicity);
+            var warpFrequency = Mathf.Lerp(
+                1.0f,
+                4.0f,
+                GetSeedValue(starIndex, 151));
+            var spiralStrength = Mathf.Lerp(
+                0.18f,
+                0.94f,
+                GetSeedValue(starIndex, 157));
+            var turbulenceScale = Mathf.Lerp(
+                0.72f,
+                1.54f,
+                GetSeedValue(starIndex, 163));
+            var density = Mathf.Lerp(0.68f, 1.72f, densitySeed);
+            density *= Mathf.Lerp(0.78f, 1.30f, metallicity);
+            var dopplerStrength = Mathf.Lerp(
+                0.42f,
+                1.10f,
+                massFraction);
+            var rotationSpeed = Mathf.Lerp(
+                0.34f,
+                1.42f,
+                Mathf.Lerp(massFraction, gasSeed, 0.32f));
+
+            Color innerColor;
+            Color middleColor;
+            Color outerColor;
+            Color dustColor;
+
+            // Gas family uses the generated system state rather than a new
+            // random draw. Metal-rich systems tend toward dusty crimson
+            // disks; low-metallicity systems favour blue hydrogen/helium
+            // plasma, while the remaining families fill the gold and violet
+            // ranges seen in different accretion environments.
+            var gasFamily = gasSeed;
+
+            if (metallicity > 0.68f && gasFamily > 0.24f)
+            {
+                innerColor = new Color(5.6f, 1.62f, 0.38f, 1.0f);
+                middleColor = new Color(1.80f, 0.13f, 0.018f, 1.0f);
+                outerColor = new Color(0.34f, 0.006f, 0.001f, 1.0f);
+                dustColor = new Color(0.80f, 0.024f, 0.004f, 1.0f);
+            }
+            else if (gasFamily < 0.27f)
+            {
+                innerColor = new Color(2.8f, 4.5f, 6.4f, 1.0f);
+                middleColor = new Color(0.40f, 1.48f, 3.20f, 1.0f);
+                outerColor = new Color(0.045f, 0.18f, 0.72f, 1.0f);
+                dustColor = new Color(0.72f, 0.22f, 0.06f, 1.0f);
+            }
+            else if (gasFamily < 0.56f)
+            {
+                innerColor = new Color(6.2f, 4.35f, 1.54f, 1.0f);
+                middleColor = new Color(2.16f, 0.58f, 0.075f, 1.0f);
+                outerColor = new Color(0.44f, 0.018f, 0.003f, 1.0f);
+                dustColor = new Color(0.94f, 0.17f, 0.012f, 1.0f);
+            }
+            else
+            {
+                innerColor = new Color(3.05f, 2.36f, 5.8f, 1.0f);
+                middleColor = new Color(0.78f, 0.20f, 1.72f, 1.0f);
+                outerColor = new Color(0.12f, 0.012f, 0.42f, 1.0f);
+                dustColor = new Color(0.86f, 0.06f, 0.46f, 1.0f);
+            }
+
+            var proxyIntensity = Mathf.Lerp(1.20f, 2.05f, densitySeed);
+            var localIntensity = Mathf.Lerp(1.35f, 3.15f, densitySeed);
+
+            return new BlackHoleAccretionDiskProfile(
+                innerRadius,
+                outerRadius,
+                thickness,
+                flare,
+                warpStrength,
+                warpFrequency,
+                spiralStrength,
+                turbulenceScale,
+                density,
+                dopplerStrength,
+                rotationSpeed,
+                proxyIntensity,
+                localIntensity,
+                innerColor,
+                middleColor,
+                outerColor,
+                dustColor);
         }
 
         private Quaternion GetBlackHoleDiskRotation(int starIndex)
@@ -6180,6 +6577,121 @@ public sealed class GalaxyStarfieldRenderer
             _runtimeBlackHoleAccretionDiskMesh.RecalculateBounds();
 
             return _runtimeBlackHoleAccretionDiskMesh;
+        }
+
+        private Mesh ResolveBlackHoleAccretionVolumeMesh()
+        {
+            if (_runtimeBlackHoleAccretionVolumeMesh != null)
+                return _runtimeBlackHoleAccretionVolumeMesh;
+
+            // Seven transparent annular gas sheets create a real finite
+            // thickness while remaining much cheaper than ray marching a
+            // dense 3D texture. Their vertical separation, warp and flare are
+            // transformed in the volume shader from each disk profile.
+            const int angularSegments = 144;
+            const int radialSegments = 22;
+            const int verticalLayers = 7;
+
+            var ringVertexCount = (angularSegments + 1) *
+                                  (radialSegments + 1);
+            var vertexCount = ringVertexCount * verticalLayers;
+            var vertices = new Vector3[vertexCount];
+            var normals = new Vector3[vertexCount];
+            var uvs = new Vector2[vertexCount];
+            var volumeUvs = new Vector2[vertexCount];
+
+            for (var layer = 0; layer < verticalLayers; layer++)
+            {
+                var verticalFraction = Mathf.Lerp(
+                    -1.0f,
+                    1.0f,
+                    layer / (float)(verticalLayers - 1));
+                var layerOffset = layer * ringVertexCount;
+
+                for (var radial = 0; radial <= radialSegments; radial++)
+                {
+                    var radialFraction = radial / (float)radialSegments;
+                    var radius = Mathf.Lerp(
+                        BlackHoleAccretionDiskInnerMeshRadius,
+                        BlackHoleAccretionDiskOuterMeshRadius,
+                        radialFraction * radialFraction);
+
+                    for (var angular = 0;
+                         angular <= angularSegments;
+                         angular++)
+                    {
+                        var angularFraction =
+                            angular / (float)angularSegments;
+                        var angle = angularFraction * Mathf.PI * 2.0f;
+                        var index = layerOffset +
+                                    radial * (angularSegments + 1) +
+                                    angular;
+
+                        vertices[index] = new Vector3(
+                            Mathf.Cos(angle) * radius,
+                            verticalFraction,
+                            Mathf.Sin(angle) * radius);
+
+                        normals[index] = Vector3.up;
+                        uvs[index] = new Vector2(
+                            angularFraction,
+                            radialFraction);
+                        volumeUvs[index] = new Vector2(
+                            verticalFraction,
+                            layer / (float)(verticalLayers - 1));
+                    }
+                }
+            }
+
+            var trianglesPerLayer = angularSegments * radialSegments * 6;
+            var triangles = new int[trianglesPerLayer * verticalLayers];
+            var triangleIndex = 0;
+
+            for (var layer = 0; layer < verticalLayers; layer++)
+            {
+                var layerOffset = layer * ringVertexCount;
+
+                for (var radial = 0; radial < radialSegments; radial++)
+                {
+                    for (var angular = 0;
+                         angular < angularSegments;
+                         angular++)
+                    {
+                        var current = layerOffset +
+                                      radial * (angularSegments + 1) +
+                                      angular;
+                        var next = current + angularSegments + 1;
+
+                        triangles[triangleIndex++] = current;
+                        triangles[triangleIndex++] = next;
+                        triangles[triangleIndex++] = current + 1;
+
+                        triangles[triangleIndex++] = current + 1;
+                        triangles[triangleIndex++] = next;
+                        triangles[triangleIndex++] = next + 1;
+                    }
+                }
+            }
+
+            _runtimeBlackHoleAccretionVolumeMesh = new Mesh
+            {
+                name = "Runtime Volumetric Black Hole Accretion Disk",
+                indexFormat = IndexFormat.UInt32
+            };
+
+            _runtimeBlackHoleAccretionVolumeMesh.vertices = vertices;
+            _runtimeBlackHoleAccretionVolumeMesh.normals = normals;
+            _runtimeBlackHoleAccretionVolumeMesh.uv = uvs;
+            _runtimeBlackHoleAccretionVolumeMesh.uv2 = volumeUvs;
+            _runtimeBlackHoleAccretionVolumeMesh.triangles = triangles;
+            _runtimeBlackHoleAccretionVolumeMesh.bounds = new Bounds(
+                Vector3.zero,
+                new Vector3(
+                    BlackHoleAccretionDiskOuterMeshRadius * 2.10f,
+                    BlackHoleAccretionDiskMaximumHalfHeight * 2.20f,
+                    BlackHoleAccretionDiskOuterMeshRadius * 2.10f));
+
+            return _runtimeBlackHoleAccretionVolumeMesh;
         }
 
         private Mesh ResolveCloseStarSurfaceMesh()
