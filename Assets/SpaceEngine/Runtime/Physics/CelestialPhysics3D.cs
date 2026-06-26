@@ -1,18 +1,16 @@
 using System;
+using SpaceEngine.Runtime.Content.StellarObjects.Generation.Galaxies;
 using SpaceEngine.Runtime.Data;
-using SpaceEngine.Runtime.Generation.Galaxy;
-using SpaceEngine.Runtime.Generation.SolarSystem;
-using SpaceEngine.Runtime.Streaming;
+using SpaceEngine.Runtime.Generation.Coordinates;
 using Unity.Mathematics;
 using UnityEngine;
 
 namespace SpaceEngine.Runtime.Physics
 {
     /// <summary>
-    /// Current 3D simulation implementation. It owns the common simulation
-    /// clock and resolves deterministic positions for anchors. It deliberately
-    /// does not move Unity transforms: motion goes through CelestialAnchor,
-    /// while the renderer reads the same anchor afterwards.
+    /// Current 3D simulation implementation. It owns only time and physics
+    /// coordinates; generated galaxy/system content stays in ScriptableObject
+    /// generators selected by their own GetWeight contracts.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class CelestialPhysics3D : CelestialPhysics
@@ -43,13 +41,9 @@ namespace SpaceEngine.Runtime.Physics
         public override CelestialPositionData GetMoveData(
             CoordinatesData coordinates)
         {
-            var galaxy = GalaxyGenerator.Generate(
-                coordinates.UniverseID,
-                coordinates.GalaxyID);
-
-            var location = SolarSystemLocationGenerator.Generate(
-                galaxy,
-                coordinates.SolarSystemID);
+            var galaxy = GenerateGalaxy(coordinates);
+            var location = ResolveGalaxyGenerator(galaxy)
+                .GenerateSolarSystemLocation(galaxy, coordinates.SolarSystemID);
 
             return CelestialPositionData.FromSolarSystem(
                 coordinates,
@@ -62,56 +56,78 @@ namespace SpaceEngine.Runtime.Physics
             out CelestialPositionData positionData)
         {
             var coordinates = bodyCoordinates.SolarSystemCoordinates;
-            var solarSystem = SolarSystemGenerator.Generate(coordinates);
+            var configuration = Engine.Configuration;
+            if (!SpaceEngine.Runtime.Generation.SolarSystem.SolarSystemGeneration
+                    .TryGenerate(
+                        coordinates,
+                        configuration.SolarSystemGenerators,
+                        configuration.StellarObjectGenerators,
+                        configuration.PlanetGenerators,
+                        out var solarSystem))
+            {
+                positionData = default;
+                return false;
+            }
+
             var bodyIndex = bodyCoordinates.CelestialBodyID;
 
-            // The current generator has concrete physical data for planets.
-            // Moons, asteroids and stations can extend this branch later
-            // without changing the anchor API.
-            if (bodyIndex < 0 ||
-                bodyIndex >= solarSystem.PlanetCount)
+            if (bodyIndex < 0 || bodyIndex >= solarSystem.StellarObjects.Length)
             {
                 positionData = default;
                 return false;
             }
 
-            var totalStarMassKg = 0.0;
-
-            for (var starIndex = 0;
-                 starIndex < solarSystem.StarCount;
-                 starIndex++)
-            {
-                totalStarMassKg += solarSystem.Stars[starIndex].MassKg;
-            }
-
-            if (totalStarMassKg <= 0.0)
+            var totalSystemMassKg = SpaceEngine.Runtime.Generation.SolarSystem.SolarSystemGeneration
+                .GetTotalSystemMassKg(solarSystem);
+            if (totalSystemMassKg <= 0.0)
             {
                 positionData = default;
                 return false;
             }
 
-            var planet = solarSystem.Planets[(int)bodyIndex];
+            var body = solarSystem.StellarObjects[(int)bodyIndex];
             var positionMeters = SolarSystemOrbitUtility.GetPositionMeters(
-                planet.Orbit,
-                SolarSystemOrbitUtility.GravitationalConstant *
-                totalStarMassKg,
+                body.Orbit,
+                SolarSystemOrbitUtility.GravitationalConstant * totalSystemMassKg,
                 _simulationTimeSeconds);
 
-            var galaxy = GalaxyGenerator.Generate(
-                coordinates.UniverseID,
-                coordinates.GalaxyID);
-
-            var location = SolarSystemLocationGenerator.Generate(
-                galaxy,
-                coordinates.SolarSystemID);
+            var galaxy = GenerateGalaxy(coordinates);
+            var location = ResolveGalaxyGenerator(galaxy)
+                .GenerateSolarSystemLocation(galaxy, coordinates.SolarSystemID);
 
             positionData = new CelestialPositionData(
                 bodyCoordinates,
                 location.GalaxyLocalPositionLightYears,
                 positionMeters,
-                planet.RadiusMeters);
-
+                body.RadiusMeters);
             return true;
+        }
+
+        private SpaceEngine.Runtime.Data.Galaxy.GalaxyData GenerateGalaxy(
+            in CoordinatesData coordinates)
+        {
+            var configuration = Engine.Configuration;
+            var universePosition = LogicalCoordinatesResolver
+                .ResolveGalaxyUniversePosition(
+                    coordinates.UniverseID,
+                    coordinates.GalaxyID);
+            return SpaceEngine.Runtime.Generation.Universe.UniverseGeneration.GenerateGalaxy(
+                configuration.GalaxyGenerators,
+                coordinates.UniverseID,
+                coordinates.GalaxyID,
+                universePosition);
+        }
+
+        private GalaxyGenerator
+            ResolveGalaxyGenerator(
+                SpaceEngine.Runtime.Data.Galaxy.GalaxyData galaxy)
+        {
+            var configuration = Engine.Configuration;
+            return SpaceEngine.Runtime.Generation.Universe.UniverseGeneration.ResolveGalaxyGenerator(
+                configuration.GalaxyGenerators,
+                galaxy.UniverseID,
+                galaxy.GalaxyID,
+                galaxy.UniversePositionLightYears);
         }
     }
 }

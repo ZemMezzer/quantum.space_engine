@@ -1,6 +1,7 @@
 using System;
 using SpaceEngine.Runtime.Data;
 using SpaceEngine.Runtime.Streaming;
+using SpaceEngine.Runtime.Streaming.Runtime.Anchors;
 using Unity.Mathematics;
 
 namespace SpaceEngine.Runtime.Core
@@ -12,13 +13,14 @@ namespace SpaceEngine.Runtime.Core
     /// </summary>
     public sealed class CelestialAnchor3D : CelestialAnchor
     {
-        private readonly GalaxySpaceAnchor _galaxyAnchor = new();
+        private readonly GalaxySpaceAnchor _galaxyAnchor;
         private readonly SeamlessSpaceAnchor _backend;
         private bool _isApplyingPosition;
 
         internal CelestialAnchor3D(SpaceEngine engine)
             : base(engine)
         {
+            _galaxyAnchor = new GalaxySpaceAnchor(engine.Configuration);
             _backend = new SeamlessSpaceAnchor(_galaxyAnchor);
             _backend.ActiveSolarSystemChanged +=
                 HandleActiveSolarSystemChanged;
@@ -38,7 +40,7 @@ namespace SpaceEngine.Runtime.Core
         /// Shared 3D reference-frame state used by the 3D renderer only.
         /// Gameplay remains on the abstract CelestialAnchor API.
         /// </summary>
-        internal SeamlessSpaceAnchor Backend => _backend;
+        public SeamlessSpaceAnchor Backend => _backend;
 
         public override void Move(CelestialPositionData positionData)
         {

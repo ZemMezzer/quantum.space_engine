@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 14045808e96471e478182cbc806ece66, type: 3}
+  m_Name: CelestialRenderConfiguration
+  m_EditorClassIdentifier: com.tiredsiren.quantum.space_engine.rendering::SpaceEngine.Rendering.CelestialRenderConfiguration
+  galaxyRenderers:
+  - {fileID: 11400000, guid: 54d0ae5e01df26440a1909983997c2e3, type: 2}
+  - {fileID: 11400000, guid: 9147e1e185453964fa0afd4c3c699bda, type: 2}
+  - {fileID: 11400000, guid: 4fc693d4eb0d4c449afb9fc994e28bf2, type: 2}
+  - {fileID: 11400000, guid: d0e6cb7ea9724d74a8850c8efcbc5b46, type: 2}
+  - {fileID: 11400000, guid: 3302593f72dbb194b8fc014d096329e0, type: 2}
+  - {fileID: 11400000, guid: 87d7df716b6100244875913673aa9d27, type: 2}
+  - {fileID: 11400000, guid: 03f7d73377842b0439993de5cc5a1755, type: 2}
+  stellarObjectRenderers:
+  - {fileID: 11400000, guid: 9e3b21c15f4c2fe408758519b2760a77, type: 2}
+  - {fileID: 11400000, guid: d99c92ca94fdca449b5ad605a5c1b98a, type: 2}
+  - {fileID: 11400000, guid: 01223391bc3f1204b91c35260b803f8d, type: 2}
+  aggregateStarSampleCount: 4096
+  maximumDistantGalaxyPoints: 2048
+  distantGalaxyPointHorizontalSectorRadius: 3
+  distantGalaxyPointVerticalSectorRadius: 2
+  galaxyLod0MinimumPointDiameterPixels: 3
+  galaxyLod0NearPointDiameterPixels: 0.35
+  galaxyLod0ShrinkCompleteDiameterPixels: 4.5
+  galaxyLod1FadeInStartDiameterPixels: 6
+  galaxyLod1FullyVisibleDiameterPixels: 16
+  galaxyLod0HideAfterLod1DiameterPixels: 16
+  maximumLoadedExternalGalaxies: 8
+  externalGalaxyStarfieldSampleCount: 2048
+  externalGalaxyStarPointDiameterPixels: 1
+  galaxyActivationDistanceInRadii: 1.2
+  enableGalaxyGas: 1
+  galaxyGasRaymarchSteps: 24
+  stellarFieldSectorRadius: 7
+  stellarFieldVerticalSectorRadius: 7
+  maximumStellarPoints: 10000
+  minimumStarPointDiameterPixels: 3
+  solarSystemActivationDistanceLightYears: 0.02
+  solarSystemDeactivationDistanceLightYears: 0.03
+  systemPointHideAfterVisualAngularDiameterDegrees: 0.35
+  scaledSpaceMetersPerUnityUnit: 10000000

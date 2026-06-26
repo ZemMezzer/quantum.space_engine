@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2be55ba0433f4253ade87fd82724b57b, type: 3}
+  m_Name: Lenticular Galaxy Renderer
+  m_EditorClassIdentifier: com.tiredsiren.quantum.space_engine.rendering::SpaceEngine.Rendering.Content.Galaxies.Rendering.BuiltIn.LenticularGalaxyRenderer
+  shaderMorphology: 0
+  coreColor: {r: 1, g: 1, b: 1, a: 1}
+  diskColor: {r: 1, g: 1, b: 1, a: 1}
+  nebulaColor: {r: 1, g: 1, b: 1, a: 1}
+  haloColor: {r: 1, g: 1, b: 1, a: 1}
+  externalFogColor: {r: 1, g: 1, b: 1, a: 1}
+  externalStarfieldColor: {r: 1, g: 1, b: 1, a: 1}
+  gasDensity: 0.8
+  gasBrightness: 1
+  gasOpacity: 1.25
+  gasDustStrength: 0.9
+  gasDiskRadiusMultiplier: 1
+  gasDiskThicknessMultiplier: 1

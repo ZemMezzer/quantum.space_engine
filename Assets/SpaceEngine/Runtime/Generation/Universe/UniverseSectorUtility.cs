@@ -2,24 +2,24 @@ using Unity.Mathematics;
 
 namespace SpaceEngine.Runtime.Generation.Universe
 {
-    /// <summary>
-    /// Converts exact universe-space coordinates to internal streaming sectors.
-    /// </summary>
+    /// <summary>Coordinate helpers for fixed universe map sectors.</summary>
     public static class UniverseSectorUtility
     {
-        public static int3 GetCoordinates(
-            double3 universePositionLightYears)
+        public static int3 GetCoordinates(double3 universePositionLightYears)
         {
-            return (int3)math.floor(
-                universePositionLightYears /
-                UniverseSectorGenerator.SECTOR_SIZE_LIGHT_YEARS);
+            return new int3(
+                (int)math.floor(universePositionLightYears.x /
+                    UniverseGeneration.SectorSizeLightYears),
+                (int)math.floor(universePositionLightYears.y /
+                    UniverseGeneration.SectorSizeLightYears),
+                (int)math.floor(universePositionLightYears.z /
+                    UniverseGeneration.SectorSizeLightYears));
         }
 
-        public static double3 GetOriginLightYears(
-            int3 universeSectorCoordinates)
+        public static double3 GetOriginLightYears(int3 coordinates)
         {
-            return (double3)universeSectorCoordinates *
-                   UniverseSectorGenerator.SECTOR_SIZE_LIGHT_YEARS;
+            return (double3)coordinates *
+                   UniverseGeneration.SectorSizeLightYears;
         }
     }
 }

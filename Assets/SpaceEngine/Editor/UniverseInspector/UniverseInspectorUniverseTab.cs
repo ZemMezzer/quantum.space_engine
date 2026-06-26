@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
+using SpaceEngine.Runtime.Content;
 using SpaceEngine.Runtime.Data;
 using SpaceEngine.Runtime.Data.Galaxy;
-using SpaceEngine.Runtime.Generation.Galaxy;
 using SpaceEngine.Runtime.Generation.Universe;
 using Unity.Mathematics;
 using UnityEditor;
@@ -11,609 +11,364 @@ using UnityEngine;
 namespace SpaceEngine.Editor.UniverseInspector
 {
     /// <summary>
-    /// Editor-only streamed map of the procedural universe.
-    /// The whole supported universe is available for navigation, while only
-    /// sectors around the current map view are generated and kept in memory.
+    /// Editor-only map of generated universe sectors. The engine owns the
+    /// fixed universe map while GalaxyGenerator assets own galaxy content.
     /// </summary>
     public sealed class UniverseInspectorUniverseTab : IUniverseInspectorTab
     {
-        private const int SectorRadius = 2;
+        private const int SECTOR_RADIUS = 2;
+        private const float MINIMUM_ZOOM = 0.00000001f;
+        private const float MAXIMUM_ZOOM = 0.25f;
 
-        private const float MinimumZoom = 0.00000001f;
-        private const float MaximumZoom = 1f;
+        private readonly Action<long> selectGalaxy;
+        private readonly List<GalaxyLocationData> galaxies = new();
 
-        private readonly Action<long> _selectGalaxy;
-        private readonly List<GalaxyLocationData> _galaxies = new();
+        private int3 centerSectorCoordinates;
+        private int viewYSector;
+        private bool hasGenerated;
+        private string generationError;
+        private bool shouldFrameUniverse = true;
 
-        private int3 _centerSectorCoordinates;
-        private int _viewYSector;
-
-        private bool _hasGenerated;
-        private bool _shouldFrameUniverse = true;
-
-        private float _zoom = 0.000025f;
-        private Vector2 _panOffset;
-
-        private bool _isPanning;
-        private Vector2 _previousMousePosition;
+        private float zoom = 0.000025f;
+        private Vector2 panOffset;
+        private bool isPanning;
+        private Vector2 previousMousePosition;
 
         public UniverseInspectorUniverseTab(Action<long> selectGalaxy)
         {
-            _selectGalaxy = selectGalaxy;
+            this.selectGalaxy = selectGalaxy;
         }
 
-        public void Generate(CoordinatesData coordinates)
+        public void Generate(
+            SpaceEngineConfiguration configuration,
+            CoordinatesData coordinates)
         {
-            // The default map camera starts at the actual center of the
-            // supported procedural universe, not near the selected galaxy.
-            _centerSectorCoordinates = int3.zero;
-            _viewYSector = 0;
-
-            _panOffset = Vector2.zero;
-            _shouldFrameUniverse = true;
-            _hasGenerated = true;
-
-            ReloadVisibleSectors(coordinates.UniverseID);
+            centerSectorCoordinates = int3.zero;
+            viewYSector = 0;
+            panOffset = Vector2.zero;
+            shouldFrameUniverse = true;
+            hasGenerated = true;
+            ReloadVisibleSectors(configuration, coordinates.UniverseID);
         }
 
-        public void DrawInspector(CoordinatesData coordinates)
+        public void DrawInspector(
+            SpaceEngineConfiguration configuration,
+            CoordinatesData coordinates)
         {
-            GUILayout.Label(
-                "Universe",
-                EditorStyles.boldLabel);
+            GUILayout.Label("Universe", EditorStyles.boldLabel);
 
-            EditorGUILayout.LabelField(
-                "Universe ID",
-                coordinates.UniverseID.ToString());
-
-            EditorGUILayout.LabelField(
-                "Current Sector",
-                $"({_centerSectorCoordinates.x}, " +
-                $"{_centerSectorCoordinates.y}, " +
-                $"{_centerSectorCoordinates.z})");
-
-            EditorGUILayout.LabelField(
-                "Loaded Sector Cube",
-                "3 × 3 × 3");
-
-            EditorGUILayout.LabelField(
-                "Generated Galaxies",
-                _galaxies.Count.ToString());
-
-            EditorGUILayout.LabelField(
-                "Supported Sector Range",
-                $"{GalaxyIDUtility.MINIMUM_SECTOR_COORDINATE} to " +
-                $"{GalaxyIDUtility.MAXIMUM_SECTOR_COORDINATE}");
-
-            EditorGUI.BeginChangeCheck();
-
-            _viewYSector = EditorGUILayout.IntField(
-                "Y Sector Layer",
-                _viewYSector);
-
-            if (EditorGUI.EndChangeCheck())
+            if (!hasGenerated)
             {
-                _centerSectorCoordinates.y = ClampSectorCoordinate(
-                    _viewYSector);
-
-                _viewYSector = _centerSectorCoordinates.y;
-
-                ReloadVisibleSectors(coordinates.UniverseID);
+                EditorGUILayout.HelpBox(
+                    "Universe data has not been generated yet.",
+                    MessageType.None);
+                return;
             }
 
-            GUILayout.Space(8f);
+            if (!string.IsNullOrEmpty(generationError))
+                EditorGUILayout.HelpBox(generationError, MessageType.Error);
 
+            EditorGUILayout.LabelField("Universe ID", coordinates.UniverseID.ToString());
+            EditorGUILayout.LabelField(
+                "Universe Map",
+                "Built into SpaceEngine");
+            EditorGUILayout.LabelField(
+                "Current Sector",
+                $"({centerSectorCoordinates.x}, {centerSectorCoordinates.y}, {centerSectorCoordinates.z})");
+            EditorGUILayout.LabelField("Loaded Sector Cube", "5 × 5 × 5");
+            EditorGUILayout.LabelField("Generated Galaxies", galaxies.Count.ToString());
+            EditorGUILayout.LabelField(
+                "Galaxy Generator Assets",
+                configuration.GalaxyGenerators.Count.ToString());
+
+            EditorGUI.BeginChangeCheck();
+            viewYSector = EditorGUILayout.IntField("Y Sector Layer", viewYSector);
+            if (EditorGUI.EndChangeCheck())
+            {
+                centerSectorCoordinates.y = viewYSector;
+                ReloadVisibleSectors(configuration, coordinates.UniverseID);
+            }
+
+            GUILayout.Space(8.0f);
             if (GUILayout.Button("Center Universe"))
             {
-                _centerSectorCoordinates = int3.zero;
-                _viewYSector = 0;
-                _panOffset = Vector2.zero;
-                _shouldFrameUniverse = true;
-
-                ReloadVisibleSectors(coordinates.UniverseID);
+                centerSectorCoordinates = int3.zero;
+                viewYSector = 0;
+                panOffset = Vector2.zero;
+                shouldFrameUniverse = true;
+                ReloadVisibleSectors(configuration, coordinates.UniverseID);
             }
 
             if (GUILayout.Button("Frame Current Area"))
             {
-                _panOffset = Vector2.zero;
-                _shouldFrameUniverse = true;
+                panOffset = Vector2.zero;
+                shouldFrameUniverse = true;
             }
 
-            GUILayout.Space(8f);
-
+            GUILayout.Space(8.0f);
             EditorGUILayout.HelpBox(
-                "The universe is not generated into memory at once. " +
-                "Move with the middle mouse button: the inspector generates " +
-                "new surrounding sectors as the view crosses sector borders.\n\n" +
-                "Click a galaxy to open its Galaxy tab.",
+                "Every point is a real GalaxyLocationData produced by the engine universe map. " +
+                "Click a point to inspect that galaxy.",
                 MessageType.Info);
         }
 
         public void DrawCanvas(
             Rect canvasRect,
+            SpaceEngineConfiguration configuration,
             CoordinatesData coordinates)
         {
-            EditorGUI.DrawRect(
-                canvasRect,
-                new Color(0.012f, 0.016f, 0.03f));
+            EditorGUI.DrawRect(canvasRect, new Color(0.012f, 0.016f, 0.03f));
 
-            if (!_hasGenerated)
+            if (!hasGenerated)
             {
-                DrawCenteredLabel(
-                    canvasRect,
-                    "Universe data has not been generated yet.",
-                    EditorStyles.centeredGreyMiniLabel);
-
+                DrawCenteredLabel(canvasRect, "Universe data has not been generated yet.");
                 return;
             }
 
-            UpdateSectorsForCurrentView(
-                canvasRect,
-                coordinates.UniverseID);
+            UpdateSectorsForCurrentView(configuration, coordinates.UniverseID, canvasRect);
 
-            if (_shouldFrameUniverse)
+            if (shouldFrameUniverse)
             {
                 FrameCurrentArea(canvasRect);
-                _shouldFrameUniverse = false;
+                shouldFrameUniverse = false;
             }
 
             DrawSectorGrid(canvasRect);
             DrawGalaxies(canvasRect, coordinates.GalaxyID);
-            DrawHeader(canvasRect);
-
-            HandleInput(canvasRect, coordinates.UniverseID);
+            DrawHeader(canvasRect, configuration);
+            HandleInput(canvasRect, configuration, coordinates.UniverseID);
         }
 
-        private void ReloadVisibleSectors(long universeID)
+        private void ReloadVisibleSectors(
+            SpaceEngineConfiguration configuration,
+            long universeID)
         {
-            _galaxies.Clear();
+            galaxies.Clear();
+            generationError = null;
 
-            for (var y = -SectorRadius; y <= SectorRadius; y++)
+            for (var y = -SECTOR_RADIUS; y <= SECTOR_RADIUS; y++)
             {
-                for (var z = -SectorRadius; z <= SectorRadius; z++)
+                for (var z = -SECTOR_RADIUS; z <= SECTOR_RADIUS; z++)
                 {
-                    for (var x = -SectorRadius; x <= SectorRadius; x++)
+                    for (var x = -SECTOR_RADIUS; x <= SECTOR_RADIUS; x++)
                     {
-                        var sectorCoordinates = ClampSectorCoordinates(
-                            _centerSectorCoordinates +
-                            new int3(x, y, z));
+                        var sectorCoordinates = centerSectorCoordinates + new int3(x, y, z);
 
-                        var sector = UniverseSectorGenerator.Generate(
-                            universeID,
-                            sectorCoordinates);
+                        if (!UniverseInspectorGeneration.TryGenerateUniverseSector(
+                                configuration,
+                                universeID,
+                                sectorCoordinates,
+                                out var sector,
+                                out generationError))
+                        {
+                            return;
+                        }
 
-                        for (var i = 0; i < sector.Galaxies.Length; i++)
-                            _galaxies.Add(sector.Galaxies[i]);
+                        for (var index = 0; index < sector.Galaxies.Length; index++)
+                            galaxies.Add(sector.Galaxies[index]);
                     }
                 }
             }
         }
 
         private void UpdateSectorsForCurrentView(
-            Rect canvasRect,
-            long universeID)
+            SpaceEngineConfiguration configuration,
+            long universeID,
+            Rect canvasRect)
         {
-            if (_zoom <= 0.0f)
+            if (zoom <= 0.0f)
                 return;
 
-            var viewedUniversePosition = GetViewedUniversePosition(
-                canvasRect);
+            // WorldToCanvas() uses absolute universe coordinates:
+            //
+            //   screen = canvasCenter + panOffset + world * zoom
+            //
+            // Therefore the world position under the canvas centre is derived
+            // solely from panOffset. Re-basing panOffset when the streamed
+            // sector changes applies the sector delta a second time and makes
+            // the whole map jump out of view after crossing a sector boundary.
+            var viewedPosition = new double3(
+                -panOffset.x / zoom,
+                0.0,
+                panOffset.y / zoom);
 
-            var newCenterSector = ClampSectorCoordinates(
-                UniverseSectorUtility.GetCoordinates(
-                    viewedUniversePosition));
+            var newCenter = UniverseSectorUtility.GetCoordinates(viewedPosition);
+            newCenter.y = viewYSector;
 
-            newCenterSector.y = ClampSectorCoordinate(
-                _viewYSector);
-
-            if (newCenterSector.Equals(_centerSectorCoordinates))
+            if (newCenter.Equals(centerSectorCoordinates))
                 return;
 
-            PreserveCameraPosition(newCenterSector);
-
-            _centerSectorCoordinates = newCenterSector;
-            _viewYSector = newCenterSector.y;
-
-            ReloadVisibleSectors(universeID);
-        }
-
-        private void PreserveCameraPosition(int3 newCenterSector)
-        {
-            var oldCenterPosition = GetSectorCenterPosition(
-                _centerSectorCoordinates);
-
-            var newCenterPosition = GetSectorCenterPosition(
-                newCenterSector);
-
-            var delta = newCenterPosition - oldCenterPosition;
-
-            _panOffset += new Vector2(
-                (float)(delta.x * _zoom),
-                (float)(-delta.z * _zoom));
-        }
-
-        private double3 GetViewedUniversePosition(Rect canvasRect)
-        {
-            var centerPosition = GetSectorCenterPosition(
-                _centerSectorCoordinates);
-
-            return new double3(
-                centerPosition.x - _panOffset.x / _zoom,
-                centerPosition.y,
-                centerPosition.z + _panOffset.y / _zoom);
+            // Changing the loaded sector window must not change the canvas
+            // transform. The visible world remains continuous while only the
+            // cached galaxy sectors are replaced around the new view centre.
+            centerSectorCoordinates = newCenter;
+            ReloadVisibleSectors(configuration, universeID);
         }
 
         private void FrameCurrentArea(Rect canvasRect)
         {
-            var visibleWidthLightYears =
-                UniverseSectorGenerator.SECTOR_SIZE_LIGHT_YEARS *
-                (SectorRadius * 2 + 1);
-
-            _zoom = Mathf.Clamp(
-                canvasRect.width * 0.82f /
-                (float)visibleWidthLightYears,
-                MinimumZoom,
-                MaximumZoom);
-
-            _panOffset = Vector2.zero;
+            var visibleWidth = UniverseGeneration.SectorSizeLightYears *
+                               (SECTOR_RADIUS * 2 + 1);
+            zoom = Mathf.Clamp(
+                canvasRect.width * 0.80f / (float)visibleWidth,
+                MINIMUM_ZOOM,
+                MAXIMUM_ZOOM);
+            panOffset = Vector2.zero;
         }
 
         private void DrawSectorGrid(Rect canvasRect)
         {
-            var sectorSizePixels =
-                (float)UniverseSectorGenerator.SECTOR_SIZE_LIGHT_YEARS *
-                _zoom;
+            var sectorSizePixels = (float)(
+                UniverseGeneration.SectorSizeLightYears * zoom);
 
-            if (sectorSizePixels < 6f)
+            if (sectorSizePixels < 18.0f)
                 return;
 
-            var center = canvasRect.center + _panOffset;
+            var center = canvasRect.center + panOffset;
+            var lineColor = new Color(0.15f, 0.18f, 0.28f, 0.55f);
 
             Handles.BeginGUI();
-            Handles.color = new Color(
-                0.24f,
-                0.31f,
-                0.5f,
-                0.22f);
+            var oldColor = Handles.color;
+            Handles.color = lineColor;
 
-            for (var x = -SectorRadius; x <= SectorRadius + 1; x++)
+            for (var x = center.x % sectorSizePixels;
+                 x < canvasRect.xMax;
+                 x += sectorSizePixels)
             {
-                var screenX = center.x +
-                              (x - 0.5f) * sectorSizePixels;
-
-                Handles.DrawLine(
-                    new Vector3(screenX, canvasRect.yMin),
-                    new Vector3(screenX, canvasRect.yMax));
+                Handles.DrawLine(new Vector3(x, canvasRect.yMin), new Vector3(x, canvasRect.yMax));
             }
 
-            for (var z = -SectorRadius; z <= SectorRadius + 1; z++)
+            for (var y = center.y % sectorSizePixels;
+                 y < canvasRect.yMax;
+                 y += sectorSizePixels)
             {
-                var screenY = center.y +
-                              (z - 0.5f) * sectorSizePixels;
-
-                Handles.DrawLine(
-                    new Vector3(canvasRect.xMin, screenY),
-                    new Vector3(canvasRect.xMax, screenY));
+                Handles.DrawLine(new Vector3(canvasRect.xMin, y), new Vector3(canvasRect.xMax, y));
             }
 
-            Handles.color = new Color(
-                0.55f,
-                0.68f,
-                1f,
-                0.65f);
-
-            Handles.DrawWireDisc(
-                center,
-                Vector3.forward,
-                Mathf.Max(4f, sectorSizePixels * 0.03f));
-
+            Handles.color = oldColor;
             Handles.EndGUI();
         }
 
-        private void DrawGalaxies(
-            Rect canvasRect,
-            long selectedGalaxyID)
+        private void DrawGalaxies(Rect canvasRect, long selectedGalaxyID)
         {
-            var centerPosition = GetSectorCenterPosition(
-                _centerSectorCoordinates);
-
-            for (var i = 0; i < _galaxies.Count; i++)
+            for (var index = 0; index < galaxies.Count; index++)
             {
-                var galaxy = _galaxies[i];
+                var galaxy = galaxies[index];
+                var point = WorldToCanvas(canvasRect, galaxy.UniversePositionLightYears);
 
-                var screenPosition = ToScreenPosition(
-                    canvasRect,
-                    galaxy.UniversePositionLightYears);
-
-                if (!canvasRect.Contains(screenPosition))
+                if (!canvasRect.Contains(point))
                     continue;
 
-                var yDistance = math.abs(
-                    galaxy.UniversePositionLightYears.y -
-                    centerPosition.y);
+                var radius = Mathf.Clamp(
+                    (float)(galaxy.RadiusLightYears * zoom * 0.08),
+                    2.0f,
+                    11.0f);
+                var color = UniverseInspectorGeneration.GetStableColor(galaxy.GalaxyID);
+                color.a = galaxy.GalaxyID == selectedGalaxyID ? 1.0f : 0.72f;
 
-                var maximumYDistance =
-                    UniverseSectorGenerator.SECTOR_SIZE_LIGHT_YEARS *
-                    (SectorRadius + 1);
+                EditorGUI.DrawRect(
+                    new Rect(point.x - radius, point.y - radius, radius * 2.0f, radius * 2.0f),
+                    color);
 
-                var yFade = Mathf.Clamp01(
-                    1f - (float)(yDistance / maximumYDistance));
-
-                var color = GetGalaxyColor(galaxy.Type);
-                color.a = Mathf.Lerp(0.25f, 0.95f, yFade);
-
-                var isSelected =
-                    galaxy.GalaxyID == selectedGalaxyID;
-
-                var radius = isSelected ? 6f : 3f;
-
-                Handles.BeginGUI();
-
-                Handles.color = color;
-                Handles.DrawSolidDisc(
-                    screenPosition,
-                    Vector3.forward,
-                    radius);
-
-                if (isSelected)
-                {
-                    Handles.color = Color.white;
-
-                    Handles.DrawWireDisc(
-                        screenPosition,
-                        Vector3.forward,
-                        radius + 3f);
-                }
-
-                Handles.EndGUI();
-
-                if (isSelected)
+                if (galaxy.GalaxyID == selectedGalaxyID)
                 {
                     GUI.Label(
-                        new Rect(
-                            screenPosition.x + 9f,
-                            screenPosition.y - 10f,
-                            260f,
-                            20f),
-                        $"Selected · {galaxy.Type}",
-                        EditorStyles.miniLabel);
+                        new Rect(point.x + radius + 3.0f, point.y - 10.0f, 180.0f, 20.0f),
+                        $"Selected · Galaxy {galaxy.GalaxyID}",
+                        EditorStyles.whiteMiniLabel);
                 }
             }
         }
 
-        private void DrawHeader(Rect canvasRect)
+        private void DrawHeader(Rect canvasRect, SpaceEngineConfiguration configuration)
         {
             GUI.Label(
-                new Rect(
-                    canvasRect.x + 12f,
-                    canvasRect.y + 10f,
-                    760f,
-                    20f),
-                $"Universe sector ({_centerSectorCoordinates.x}, " +
-                $"{_centerSectorCoordinates.y}, " +
-                $"{_centerSectorCoordinates.z}) · " +
-                $"{GetLightYearsPerPixel():F0} ly per pixel",
-                EditorStyles.miniLabel);
-
-            GUI.Label(
-                new Rect(
-                    canvasRect.x + 12f,
-                    canvasRect.y + 30f,
-                    760f,
-                    20f),
-                "Top-down X/Z projection · sectors generate while moving",
-                EditorStyles.miniLabel);
+                new Rect(canvasRect.xMin + 12.0f, canvasRect.yMin + 10.0f, 420.0f, 22.0f),
+                "Universe map · engine hierarchy · scroll to zoom · drag with middle mouse",
+                EditorStyles.whiteMiniLabel);
         }
 
         private void HandleInput(
             Rect canvasRect,
+            SpaceEngineConfiguration configuration,
             long universeID)
         {
             var currentEvent = Event.current;
-
             if (!canvasRect.Contains(currentEvent.mousePosition))
                 return;
 
             if (currentEvent.type == EventType.ScrollWheel)
             {
-                var previousZoom = _zoom;
+                var previousZoom = zoom;
+                zoom = Mathf.Clamp(
+                    zoom * (currentEvent.delta.y > 0.0f ? 0.82f : 1.22f),
+                    MINIMUM_ZOOM,
+                    MAXIMUM_ZOOM);
 
-                _zoom = Mathf.Clamp(
-                    _zoom * (1f - currentEvent.delta.y * 0.08f),
-                    MinimumZoom,
-                    MaximumZoom);
-
-                var center = canvasRect.center + _panOffset;
-                var mouseOffset = currentEvent.mousePosition - center;
-
-                if (previousZoom > 0.0f)
+                if (Math.Abs(previousZoom - zoom) > 0.00000000001f)
                 {
-                    _panOffset += mouseOffset *
-                                  (1f - _zoom / previousZoom);
+                    var mouseDelta = currentEvent.mousePosition - canvasRect.center - panOffset;
+                    panOffset += mouseDelta * (1.0f - zoom / previousZoom);
+                    RepaintCurrentWindow();
                 }
 
                 currentEvent.Use();
                 return;
             }
 
-            if (currentEvent.type == EventType.MouseDown &&
-                currentEvent.button == 0)
+            if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0)
             {
-                if (TryGetGalaxyAtScreenPosition(
-                    canvasRect,
-                    currentEvent.mousePosition,
-                    out var galaxyID))
+                for (var index = galaxies.Count - 1; index >= 0; index--)
                 {
-                    _selectGalaxy?.Invoke(galaxyID);
+                    var point = WorldToCanvas(canvasRect, galaxies[index].UniversePositionLightYears);
+                    if ((point - currentEvent.mousePosition).sqrMagnitude > 144.0f)
+                        continue;
+
+                    selectGalaxy?.Invoke(galaxies[index].GalaxyID);
                     currentEvent.Use();
                     return;
                 }
             }
 
-            if (currentEvent.button != 2)
-                return;
-
-            if (currentEvent.type == EventType.MouseDown)
+            if (currentEvent.type == EventType.MouseDown && currentEvent.button == 2)
             {
-                _isPanning = true;
-                _previousMousePosition = currentEvent.mousePosition;
-
+                isPanning = true;
+                previousMousePosition = currentEvent.mousePosition;
                 currentEvent.Use();
                 return;
             }
 
-            if (currentEvent.type == EventType.MouseDrag && _isPanning)
+            if (currentEvent.type == EventType.MouseDrag && isPanning)
             {
-                _panOffset += currentEvent.mousePosition -
-                              _previousMousePosition;
-
-                _previousMousePosition =
-                    currentEvent.mousePosition;
-
-                UpdateSectorsForCurrentView(
-                    canvasRect,
-                    universeID);
-
+                panOffset += currentEvent.mousePosition - previousMousePosition;
+                previousMousePosition = currentEvent.mousePosition;
+                RepaintCurrentWindow();
                 currentEvent.Use();
                 return;
             }
 
-            if (currentEvent.type == EventType.MouseUp)
+            if (currentEvent.type == EventType.MouseUp && currentEvent.button == 2)
             {
-                _isPanning = false;
+                isPanning = false;
                 currentEvent.Use();
             }
         }
 
-        private bool TryGetGalaxyAtScreenPosition(
-            Rect canvasRect,
-            Vector2 mousePosition,
-            out long galaxyID)
+        private Vector2 WorldToCanvas(Rect canvasRect, double3 universePosition)
         {
-            const float HitRadiusPixels = 10f;
-
-            var nearestDistanceSquared =
-                HitRadiusPixels * HitRadiusPixels;
-
-            galaxyID = 0L;
-
-            for (var i = 0; i < _galaxies.Count; i++)
-            {
-                var screenPosition = ToScreenPosition(
-                    canvasRect,
-                    _galaxies[i].UniversePositionLightYears);
-
-                var distanceSquared =
-                    (screenPosition - mousePosition).sqrMagnitude;
-
-                if (distanceSquared >= nearestDistanceSquared)
-                    continue;
-
-                nearestDistanceSquared = distanceSquared;
-                galaxyID = _galaxies[i].GalaxyID;
-            }
-
-            return galaxyID != 0L;
+            return canvasRect.center + panOffset + new Vector2(
+                (float)(universePosition.x * zoom),
+                (float)(-universePosition.z * zoom));
         }
 
-        private Vector2 ToScreenPosition(
-            Rect canvasRect,
-            double3 universePosition)
+        private static void RepaintCurrentWindow()
         {
-            var relative = universePosition -
-                           GetSectorCenterPosition(
-                               _centerSectorCoordinates);
-
-            var center = canvasRect.center + _panOffset;
-
-            return new Vector2(
-                center.x + (float)relative.x * _zoom,
-                center.y - (float)relative.z * _zoom);
+            EditorWindow.focusedWindow?.Repaint();
         }
 
-        private static double3 GetSectorCenterPosition(
-            int3 sectorCoordinates)
+        private static void DrawCenteredLabel(Rect canvasRect, string text)
         {
-            var sectorSize =
-                UniverseSectorGenerator.SECTOR_SIZE_LIGHT_YEARS;
-
-            return UniverseSectorUtility.GetOriginLightYears(
-                       sectorCoordinates) +
-                   new double3(
-                       sectorSize * 0.5,
-                       sectorSize * 0.5,
-                       sectorSize * 0.5);
-        }
-
-        private static int3 ClampSectorCoordinates(int3 coordinates)
-        {
-            return new int3(
-                ClampSectorCoordinate(coordinates.x),
-                ClampSectorCoordinate(coordinates.y),
-                ClampSectorCoordinate(coordinates.z));
-        }
-
-        private static int ClampSectorCoordinate(int value)
-        {
-            return math.clamp(
-                value,
-                GalaxyIDUtility.MINIMUM_SECTOR_COORDINATE,
-                GalaxyIDUtility.MAXIMUM_SECTOR_COORDINATE);
-        }
-
-        private float GetLightYearsPerPixel()
-        {
-            return 1f / Mathf.Max(
-                _zoom,
-                MinimumZoom);
-        }
-
-        private static Color GetGalaxyColor(GalaxyType type)
-        {
-            switch (type)
-            {
-                case GalaxyType.Spiral:
-                    return new Color(0.45f, 0.7f, 1f);
-
-                case GalaxyType.BarredSpiral:
-                    return new Color(0.95f, 0.74f, 0.36f);
-
-                case GalaxyType.Elliptical:
-                    return new Color(1f, 0.82f, 0.58f);
-
-                case GalaxyType.Lenticular:
-                    return new Color(0.72f, 0.82f, 0.92f);
-
-                case GalaxyType.Irregular:
-                    return new Color(0.45f, 1f, 0.68f);
-
-                case GalaxyType.Ring:
-                    return new Color(0.95f, 0.45f, 0.82f);
-
-                case GalaxyType.Dwarf:
-                    return new Color(0.68f, 0.68f, 0.75f);
-
-                default:
-                    return Color.white;
-            }
-        }
-
-        private static void DrawCenteredLabel(
-            Rect rect,
-            string text,
-            GUIStyle style)
-        {
-            var content = new GUIContent(text);
-            var size = style.CalcSize(content);
-
-            GUI.Label(
-                new Rect(
-                    rect.center.x - size.x * 0.5f,
-                    rect.center.y - size.y * 0.5f,
-                    size.x,
-                    size.y),
-                content,
-                style);
+            GUI.Label(canvasRect, text, EditorStyles.centeredGreyMiniLabel);
         }
     }
 }

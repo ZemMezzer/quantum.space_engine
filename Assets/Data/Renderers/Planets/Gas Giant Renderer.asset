@@ -1,0 +1,17 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a8165427b3b332f4d8dbabb405a0d521, type: 3}
+  m_Name: Gas Giant Renderer
+  m_EditorClassIdentifier: com.tiredsiren.quantum.space_engine.rendering::SpaceEngine.Rendering.Content.StellarObjects.Renderers.Planets.GasGiantStellarObjectRenderer
+  color: {r: 0.85, g: 0.56, b: 0.25, a: 1}
+  minimumAngularDiameterDegrees: 0.004
+  minimumDiameterInUnityUnits: 1

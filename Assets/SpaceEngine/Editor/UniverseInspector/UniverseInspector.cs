@@ -1,3 +1,5 @@
+using SpaceEngine.Runtime.Content;
+using RuntimeSpaceEngine = global::SpaceEngine.Runtime.Core.SpaceEngine;
 using SpaceEngine.Runtime.Data;
 using UnityEditor;
 using UnityEngine;
@@ -6,286 +8,316 @@ namespace SpaceEngine.Editor.UniverseInspector
 {
     internal interface IUniverseInspectorTab
     {
-        void Generate(CoordinatesData coordinates);
+        void Generate(
+            SpaceEngineConfiguration configuration,
+            CoordinatesData coordinates);
 
-        void DrawInspector(CoordinatesData coordinates);
+        void DrawInspector(
+            SpaceEngineConfiguration configuration,
+            CoordinatesData coordinates);
 
         void DrawCanvas(
             Rect canvasRect,
+            SpaceEngineConfiguration configuration,
             CoordinatesData coordinates);
     }
 
     /// <summary>
-    /// Editor tool for inspecting generated universe layers by logical IDs.
-    /// Sectors are resolved internally and never form part of user-facing coordinates.
+    /// Inspects generated hierarchy data through the configured public content
+    /// contracts. It never chooses concrete galaxy or stellar-object types.
     /// </summary>
     public sealed class UniverseInspector : EditorWindow
     {
-        private const float SidebarWidth = 300f;
+        private const float SidebarWidth = 330.0f;
 
-        private UniverseInspectorUniverseTab _universeTab;
-        private readonly UniverseInspectorGalaxyTab _galaxyTab = new();
-        private readonly UniverseInspectorSolarSystemTab _solarSystemTab = new();
-        private readonly UniverseInspectorPlanetTab _planetTab = new();
+        [SerializeField] private RuntimeSpaceEngine spaceEngine;
+        [SerializeField] private SpaceEngineConfiguration configurationOverride;
 
-        private int _selectedTabIndex;
+        private UniverseInspectorUniverseTab universeTab;
+        private readonly UniverseInspectorGalaxyTab galaxyTab = new();
+        private readonly UniverseInspectorSolarSystemTab solarSystemTab = new();
+        private readonly UniverseInspectorStellarObjectTab stellarObjectTab = new();
+        private readonly UniverseInspectorEntitySearchTab entitySearchTab = new();
 
-        private long _universeID = 1;
-        private long _galaxyID = 1;
-        private long _solarSystemID = 1;
-        private long _celestialBodyID;
+        private int selectedTabIndex;
+        private long universeID = 1;
+        private long galaxyID = 1;
+        private long solarSystemID = 1;
+        private long stellarObjectIndex;
 
-        private CoordinatesData _lastGeneratedCoordinates;
-        private CelestialBodyCoordinatesData _lastGeneratedBodyCoordinates;
-
-        private int _lastGeneratedTabIndex = -1;
-        private bool _hasGeneratedCurrentView;
+        private SpaceEngineConfiguration lastConfiguration;
+        private CoordinatesData lastGeneratedCoordinates;
+        private long lastGeneratedStellarObjectIndex;
+        private int lastGeneratedTabIndex = -1;
+        private bool hasGeneratedCurrentView;
 
         [MenuItem("Space Engine/Universe Inspector")]
         public static void Open()
         {
             var window = GetWindow<UniverseInspector>();
-
             window.titleContent = new GUIContent("Universe Inspector");
-            window.minSize = new Vector2(960f, 620f);
+            window.minSize = new Vector2(980.0f, 640.0f);
             window.Show();
         }
 
         private void OnEnable()
         {
-            _universeTab ??= new UniverseInspectorUniverseTab(
+            universeTab ??= new UniverseInspectorUniverseTab(
                 SelectGalaxyFromUniverseMap);
 
-            _galaxyTab.SetSolarSystemSelectionCallback(
+            galaxyTab.SetSolarSystemSelectionCallback(
                 SelectSolarSystemFromGalaxyMap);
 
-            _hasGeneratedCurrentView = false;
-            _lastGeneratedTabIndex = -1;
+            solarSystemTab.SetStellarObjectSelectionCallback(
+                SelectStellarObjectFromSystemMap);
+
+            entitySearchTab.SetObjectSelectionCallback(
+                SelectObjectFromEntitySearch);
+
+            hasGeneratedCurrentView = false;
+            lastGeneratedTabIndex = -1;
         }
 
         private void OnGUI()
         {
-            if (_universeTab == null)
+            if (universeTab == null)
                 OnEnable();
 
-            DrawSidebar();
-            DrawCanvas();
+            var configuration = DrawSidebar();
+            DrawCanvas(configuration);
         }
 
-        private void DrawSidebar()
+        private SpaceEngineConfiguration DrawSidebar()
         {
             var sidebarRect = new Rect(
-                0f,
-                0f,
+                0.0f,
+                0.0f,
                 SidebarWidth,
                 position.height);
 
-            EditorGUI.DrawRect(
-                sidebarRect,
-                new Color(0.11f, 0.12f, 0.15f));
-
+            EditorGUI.DrawRect(sidebarRect, new Color(0.11f, 0.12f, 0.15f));
             GUILayout.BeginArea(sidebarRect);
 
-            GUILayout.Space(10f);
+            GUILayout.Space(10.0f);
+            GUILayout.Label("Universe Inspector", EditorStyles.boldLabel);
+            GUILayout.Space(8.0f);
 
-            GUILayout.Label(
-                "Universe Inspector",
-                EditorStyles.boldLabel);
+            DrawConfigurationFields();
+            var configuration = GetConfiguration();
 
-            GUILayout.Space(8f);
+            GUILayout.Space(10.0f);
+            selectedTabIndex = GUILayout.Toolbar(
+                selectedTabIndex,
+                new[] { "Universe", "Galaxy", "System", "Object", "Find" });
 
-            _selectedTabIndex = GUILayout.Toolbar(
-                _selectedTabIndex,
-                new[]
-                {
-                    "Universe",
-                    "Galaxy",
-                    "System",
-                    "Planet"
-                });
+            GUILayout.Space(12.0f);
+            GUILayout.Label("Coordinates", EditorStyles.boldLabel);
 
-            GUILayout.Space(12f);
+            universeID = DrawLongField("Universe ID", universeID);
+            galaxyID = DrawLongField("Galaxy ID", galaxyID);
+            solarSystemID = DrawLongField("Solar System ID", solarSystemID);
+            stellarObjectIndex = DrawLongField(
+                "Stellar Object Index",
+                stellarObjectIndex < 0L ? 0L : stellarObjectIndex);
 
-            GUILayout.Label(
-                "Coordinates",
-                EditorStyles.boldLabel);
+            GUILayout.Space(10.0f);
 
-            _universeID = DrawLongField(
-                "Universe ID",
-                _universeID);
-
-            _galaxyID = DrawLongField(
-                "Galaxy ID",
-                _galaxyID);
-
-            _solarSystemID = DrawLongField(
-                "Solar System ID",
-                _solarSystemID);
-
-            _celestialBodyID = DrawLongField(
-                "Celestial Body ID",
-                _celestialBodyID);
-
-            var coordinates = GetCoordinates();
-
-            var bodyCoordinates = GetCelestialBodyCoordinates(
-                coordinates);
-
-            EnsureCurrentViewGenerated(
-                coordinates,
-                bodyCoordinates);
-
-            GUILayout.Space(12f);
-
-            GetSelectedTab().DrawInspector(coordinates);
+            if (!UniverseInspectorGeneration.TryValidateConfiguration(
+                    configuration,
+                    out var configurationError))
+            {
+                EditorGUILayout.HelpBox(configurationError, MessageType.Warning);
+            }
+            else
+            {
+                var coordinates = GetCoordinates();
+                EnsureCurrentViewGenerated(configuration, coordinates);
+                GetSelectedTab().DrawInspector(configuration, coordinates);
+            }
 
             GUILayout.FlexibleSpace();
-
             EditorGUILayout.HelpBox(
-                "Universe ID, Galaxy ID and Solar System ID form the " +
-                "logical address of an existing system. Internal sectors are " +
-                "used only for generation and streaming.",
+                "The inspector uses the same configured generator assets as SpaceEngine. " +
+                "Galaxy and object choices remain inside their GetWeight implementations; " +
+                "this window only displays returned generic data.",
                 MessageType.Info);
 
             GUILayout.EndArea();
+            return configuration;
         }
 
-        private void DrawCanvas()
+        private void DrawCanvas(SpaceEngineConfiguration configuration)
         {
             var canvasRect = new Rect(
                 SidebarWidth,
-                0f,
-                position.width - SidebarWidth,
+                0.0f,
+                Mathf.Max(1.0f, position.width - SidebarWidth),
                 position.height);
 
-            EditorGUI.DrawRect(
-                canvasRect,
-                new Color(0.025f, 0.03f, 0.055f));
+            EditorGUI.DrawRect(canvasRect, new Color(0.025f, 0.03f, 0.055f));
 
-            var coordinates = GetCoordinates();
-
-            var bodyCoordinates = GetCelestialBodyCoordinates(
-                coordinates);
-
-            EnsureCurrentViewGenerated(
-                coordinates,
-                bodyCoordinates);
-
-            GetSelectedTab().DrawCanvas(
-                canvasRect,
-                coordinates);
-        }
-
-        private void EnsureCurrentViewGenerated(
-            CoordinatesData coordinates,
-            CelestialBodyCoordinatesData bodyCoordinates)
-        {
-            var tabChanged =
-                _selectedTabIndex != _lastGeneratedTabIndex;
-
-            var systemCoordinatesChanged =
-                !_hasGeneratedCurrentView ||
-                _lastGeneratedCoordinates != coordinates;
-
-            var bodyCoordinatesChanged =
-                _selectedTabIndex == 3 &&
-                (!_hasGeneratedCurrentView ||
-                 _lastGeneratedBodyCoordinates != bodyCoordinates);
-
-            if (!tabChanged &&
-                !systemCoordinatesChanged &&
-                !bodyCoordinatesChanged)
+            if (!UniverseInspectorGeneration.TryValidateConfiguration(
+                    configuration,
+                    out var configurationError))
             {
+                DrawCenteredLabel(canvasRect, configurationError);
                 return;
             }
 
-            if (_selectedTabIndex == 3)
+            var coordinates = GetCoordinates();
+            EnsureCurrentViewGenerated(configuration, coordinates);
+            GetSelectedTab().DrawCanvas(canvasRect, configuration, coordinates);
+        }
+
+        private void DrawConfigurationFields()
+        {
+            EditorGUI.BeginChangeCheck();
+
+            spaceEngine = (RuntimeSpaceEngine)EditorGUILayout.ObjectField(
+                "Space Engine",
+                spaceEngine,
+                typeof(RuntimeSpaceEngine),
+                true);
+
+            if (spaceEngine == null)
             {
-                _planetTab.SetCelestialBodyCoordinates(
-                    bodyCoordinates);
+                configurationOverride =
+                    (SpaceEngineConfiguration)EditorGUILayout.ObjectField(
+                        "Configuration",
+                        configurationOverride,
+                        typeof(SpaceEngineConfiguration),
+                        false);
+            }
+            else
+            {
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.ObjectField(
+                        "Configuration",
+                        GetConfigurationFromSpaceEngine(),
+                        typeof(SpaceEngineConfiguration),
+                        false);
+                }
             }
 
-            GetSelectedTab().Generate(coordinates);
+            if (EditorGUI.EndChangeCheck())
+                hasGeneratedCurrentView = false;
+        }
 
-            _lastGeneratedCoordinates = coordinates;
-            _lastGeneratedBodyCoordinates = bodyCoordinates;
-            _lastGeneratedTabIndex = _selectedTabIndex;
-            _hasGeneratedCurrentView = true;
+        private SpaceEngineConfiguration GetConfiguration()
+        {
+            return spaceEngine == null
+                ? configurationOverride
+                : GetConfigurationFromSpaceEngine();
+        }
 
+        private SpaceEngineConfiguration GetConfigurationFromSpaceEngine()
+        {
+            if (spaceEngine == null)
+                return null;
+
+            var serializedObject = new SerializedObject(spaceEngine);
+            return serializedObject.FindProperty("configuration")
+                ?.objectReferenceValue as SpaceEngineConfiguration;
+        }
+
+        private void EnsureCurrentViewGenerated(
+            SpaceEngineConfiguration configuration,
+            CoordinatesData coordinates)
+        {
+            var isObjectTab = selectedTabIndex == 3;
+            var selectionChanged =
+                !hasGeneratedCurrentView ||
+                lastConfiguration != configuration ||
+                lastGeneratedTabIndex != selectedTabIndex ||
+                lastGeneratedCoordinates != coordinates ||
+                (isObjectTab &&
+                 lastGeneratedStellarObjectIndex != stellarObjectIndex);
+
+            if (!selectionChanged)
+                return;
+
+            if (isObjectTab)
+                stellarObjectTab.SetObjectIndex(stellarObjectIndex);
+
+            GetSelectedTab().Generate(configuration, coordinates);
+
+            lastConfiguration = configuration;
+            lastGeneratedCoordinates = coordinates;
+            lastGeneratedStellarObjectIndex = stellarObjectIndex;
+            lastGeneratedTabIndex = selectedTabIndex;
+            hasGeneratedCurrentView = true;
             Repaint();
         }
 
-        private void SelectGalaxyFromUniverseMap(long galaxyID)
+        private void SelectGalaxyFromUniverseMap(long selectedGalaxyID)
         {
-            _galaxyID = galaxyID;
-
-            _selectedTabIndex = 1;
-            _hasGeneratedCurrentView = false;
-
+            galaxyID = selectedGalaxyID;
+            selectedTabIndex = 1;
+            hasGeneratedCurrentView = false;
             Repaint();
         }
 
-        private void SelectSolarSystemFromGalaxyMap(
-            long solarSystemID)
+        private void SelectSolarSystemFromGalaxyMap(long selectedSolarSystemID)
         {
-            _solarSystemID = solarSystemID;
+            solarSystemID = selectedSolarSystemID;
+            selectedTabIndex = 2;
+            hasGeneratedCurrentView = false;
+            Repaint();
+        }
 
-            _selectedTabIndex = 2;
-            _hasGeneratedCurrentView = false;
+        private void SelectStellarObjectFromSystemMap(long selectedObjectIndex)
+        {
+            stellarObjectIndex = selectedObjectIndex < 0L ? 0L : selectedObjectIndex;
+            selectedTabIndex = 3;
+            hasGeneratedCurrentView = false;
+            Repaint();
+        }
 
+        private void SelectObjectFromEntitySearch(
+            long selectedSolarSystemID,
+            long selectedObjectIndex)
+        {
+            solarSystemID = selectedSolarSystemID;
+            stellarObjectIndex = selectedObjectIndex < 0L
+                ? 0L
+                : selectedObjectIndex;
+            selectedTabIndex = 3;
+            hasGeneratedCurrentView = false;
             Repaint();
         }
 
         private CoordinatesData GetCoordinates()
         {
-            return new CoordinatesData(
-                _universeID,
-                _galaxyID,
-                _solarSystemID);
-        }
-
-        private CelestialBodyCoordinatesData GetCelestialBodyCoordinates(
-            CoordinatesData coordinates)
-        {
-            return new CelestialBodyCoordinatesData(
-                coordinates,
-                _celestialBodyID);
+            return new CoordinatesData(universeID, galaxyID, solarSystemID);
         }
 
         private IUniverseInspectorTab GetSelectedTab()
         {
-            switch (_selectedTabIndex)
+            switch (selectedTabIndex)
             {
-                case 0:
-                    return _universeTab;
-
                 case 1:
-                    return _galaxyTab;
-
+                    return galaxyTab;
                 case 2:
-                    return _solarSystemTab;
-
+                    return solarSystemTab;
                 case 3:
-                    return _planetTab;
-
+                    return stellarObjectTab;
+                case 4:
+                    return entitySearchTab;
                 default:
-                    return _universeTab;
+                    return universeTab;
             }
         }
 
-        private static long DrawLongField(
-            string label,
-            long value)
+        private static long DrawLongField(string label, long value)
         {
-            var text = EditorGUILayout.TextField(
-                label,
-                value.ToString());
+            var text = EditorGUILayout.TextField(label, value.ToString());
+            return long.TryParse(text, out var parsed) ? parsed : value;
+        }
 
-            return long.TryParse(
-                text,
-                out var parsedValue)
-                ? parsedValue
-                : value;
+        private static void DrawCenteredLabel(Rect rect, string text)
+        {
+            GUI.Label(rect, text, EditorStyles.centeredGreyMiniLabel);
         }
     }
 }

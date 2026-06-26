@@ -1,35 +1,51 @@
-using SpaceEngine.Runtime.Data.Planet;
-using Unity.Collections;
+using System;
+using SpaceEngine.Runtime.Content.Entities;
 
 namespace SpaceEngine.Runtime.Data.SolarSystem
 {
     /// <summary>
-    /// Generated runtime data for one stellar system.
-    /// Supports single and binary-star systems.
+    /// Generated system result. Objects may use arbitrary derived data classes;
+    /// entity-based queries remain independent of those classes.
     /// </summary>
-    public struct SolarSystemData
+    public sealed class SolarSystemData
     {
-        public const byte MAX_STARS = 3;
-        public const byte MAX_PLANETS = 16;
+        public ulong Seed { get; }
+        public StellarObjectData[] StellarObjects { get; }
 
-        public readonly ulong Seed;
-        public readonly byte StarCount;
-        public readonly byte PlanetCount;
-
-        public readonly FixedList512Bytes<StarData> Stars;
-        public readonly FixedList4096Bytes<PlanetData> Planets;
-
-        internal SolarSystemData(
-            ulong seed,
-            FixedList512Bytes<StarData> stars,
-            FixedList4096Bytes<PlanetData> planets)
+        public SolarSystemData(ulong seed, StellarObjectData[] stellarObjects)
         {
             Seed = seed;
-            Stars = stars;
-            Planets = planets;
+            StellarObjects = stellarObjects ??
+                             Array.Empty<StellarObjectData>();
+        }
 
-            StarCount = (byte)stars.Length;
-            PlanetCount = (byte)planets.Length;
+        /// <summary>
+        /// Finds the first generated object paired to an authored entity.
+        /// Gameplay can use this for a known type without checking concrete
+        /// StarData, PlanetData or other implementation classes.
+        /// </summary>
+        public bool TryFindFirst(
+            StellarEntity entity,
+            out int objectIndex,
+            out StellarObjectData data)
+        {
+            if (entity != null)
+            {
+                for (var index = 0; index < StellarObjects.Length; index++)
+                {
+                    var candidate = StellarObjects[index];
+                    if (candidate?.Entity != entity)
+                        continue;
+
+                    objectIndex = index;
+                    data = candidate;
+                    return true;
+                }
+            }
+
+            objectIndex = -1;
+            data = null;
+            return false;
         }
     }
 }

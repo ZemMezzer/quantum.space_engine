@@ -1,6 +1,7 @@
 using System;
 using SpaceEngine.Runtime.Physics;
 using SpaceEngine.Runtime.Streaming;
+using SpaceEngine.Runtime.Content;
 using UnityEngine;
 
 namespace SpaceEngine.Runtime.Core
@@ -20,6 +21,9 @@ namespace SpaceEngine.Runtime.Core
         [SerializeField] private CelestialPhysics physics;
         [SerializeField] private CelestialRenderer renderer;
 
+        [Header("Content configuration")]
+        [SerializeField] private SpaceEngineConfiguration configuration;
+
         private bool _isInitialized;
         private bool _isShuttingDown;
 
@@ -30,8 +34,30 @@ namespace SpaceEngine.Runtime.Core
         public double SimulationTimeSeconds =>
             physics == null ? 0.0 : physics.SimulationTimeSeconds;
 
+        /// <summary>
+        /// Pure authored configuration shared by generation and rendering.
+        /// It contains only generator/entity bindings and system-structure
+        /// generators; runtime data is always returned from generators instead
+        /// of stored here.
+        /// </summary>
+        public SpaceEngineConfiguration Configuration => configuration;
+
         private void Awake()
         {
+            if (configuration == null ||
+                configuration.GalaxyGenerators.Count == 0 ||
+                configuration.SolarSystemGenerators.Count == 0 ||
+                configuration.StellarObjectGenerators.Count == 0)
+            {
+                Debug.LogError(
+                    "SpaceEngine requires a SpaceEngineConfiguration with at " +
+                    "least one galaxy entity/generator binding, SolarSystemGenerator " +
+                    "and stellar-object entity/generator binding assigned.",
+                    this);
+                enabled = false;
+                return;
+            }
+
             physics ??= GetComponent<CelestialPhysics>();
             renderer ??= GetComponent<CelestialRenderer>();
 
@@ -79,6 +105,7 @@ namespace SpaceEngine.Runtime.Core
             // anchors; renderer shutdown only releases its current reference.
             renderer?.Shutdown();
             physics?.Shutdown();
+
         }
 
         /// <summary>
@@ -149,7 +176,7 @@ namespace SpaceEngine.Runtime.Core
         private void Reset()
         {
             physics = GetComponent<CelestialPhysics3D>();
-            renderer = GetComponent<CelestialRenderer3D>();
+            renderer = GetComponent<CelestialRenderer>();
         }
 
         private void EnsureAvailable()

@@ -6,7 +6,7 @@ namespace SpaceEngine.Runtime.Generation.Galaxy
     /// Internal packing utility for stellar-field streaming slots.
     ///
     /// Gameplay CoordinatesData does not use this encoding. Logical solar
-    /// system IDs are resolved by SolarSystemLocationGenerator internally.
+    /// system IDs are resolved by the selected GalaxyGenerator.
     /// </summary>
     public static class SolarSystemIDUtility
     {
