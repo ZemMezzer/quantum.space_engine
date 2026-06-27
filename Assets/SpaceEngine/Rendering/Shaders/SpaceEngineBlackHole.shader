@@ -305,6 +305,17 @@ Shader "SpaceEngine/Streaming/Black Hole Unified"
                 return distance(cameraPosition, worldPosition);
             }
 
+            // _CameraOpaqueTexture exists only inside the current camera frustum.
+            // A ray bent around the black hole can legitimately point outside it
+            // (or behind the camera). Returning fallbackUv in that case turns
+            // off the lensing exactly at the strongest deflection and creates
+            // the apparent transparent sphere around the horizon.
+            //
+            // Keep the original raymarch and disk sampling intact. Only replace
+            // the invalid screen projection with a continuous mapping to the
+            // matching texture edge. This is not a physical off-screen sky
+            // sample, but it prevents the projection failure from cancelling
+            // the lensing and does not alter the accretion disk trajectory.
             float2 ProjectDirectionToUV(
                 float3 cameraPosition,
                 float3 rayDirection,
@@ -314,14 +325,31 @@ Shader "SpaceEngine/Streaming/Black Hole Unified"
                 float4 clipPosition = mul(
                     UNITY_MATRIX_VP,
                     float4(probePosition, 1.0));
-                if (clipPosition.w <= 1.0e-5)
-                    return fallbackUv;
 
-                float2 uv = clipPosition.xy / clipPosition.w;
-                uv = uv * 0.5 + 0.5;
-                return all(uv >= 0.0) && all(uv <= 1.0)
-                    ? uv
-                    : fallbackUv;
+                float forwardW = max(clipPosition.w, 1.0e-5);
+                float2 projectedNdc = clipPosition.xy / forwardW;
+                bool isInsideCameraTexture =
+                    clipPosition.w > 1.0e-5 &&
+                    projectedNdc.x >= -1.0 && projectedNdc.x <= 1.0 &&
+                    projectedNdc.y >= -1.0 && projectedNdc.y <= 1.0;
+
+                if (isInsideCameraTexture)
+                    return projectedNdc * 0.5 + 0.5;
+
+                // For a direction outside the camera frustum use |w|. Unlike
+                // division by w, that preserves the side of the screen as the
+                // direction crosses the camera plane. Normalising by the
+                // largest component maps the ray continuously onto the edge of
+                // the opaque texture instead of restoring fallbackUv.
+                float2 edgeNdc = clipPosition.xy / max(
+                    abs(clipPosition.w),
+                    1.0e-5);
+                float edgeScale = max(
+                    1.0,
+                    max(abs(edgeNdc.x), abs(edgeNdc.y)));
+                float2 edgeUv = 0.5 + 0.5 * (edgeNdc / edgeScale);
+
+                return clamp(edgeUv, 0.001, 0.999);
             }
 
             AccretionDensitySample EvaluateAccretionDensity(

@@ -510,11 +510,20 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 var distanceToCentre = Vector3.Distance(
                     camera.transform.position,
                     root.position);
-                var canLensScreen = centreViewport.z > 0.0f &&
-                                    distanceToCentre >
+
+                // The horizon itself exists only on the visible side of the
+                // camera. The fullscreen composite, however, must keep running
+                // while the camera is still inside the lensing volume, even if
+                // the black hole has moved behind the camera.
+                var canRenderHorizon = centreViewport.z > 0.0f &&
+                                       distanceToCentre >
+                                       horizonWorldRadius *
+                                       CameraInsideHorizonPadding;
+                var canLensScreen = distanceToCentre >
                                     horizonWorldRadius *
                                     CameraInsideHorizonPadding;
-                var horizonViewportRadius = canLensScreen
+
+                var horizonViewportRadius = canRenderHorizon
                     ? GetSphereViewportRadius(
                         camera,
                         root.position,
@@ -709,7 +718,10 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 SetFloat(material, DiskSpeed, diskAnimationSpeed);
                 SetFloat(material, DiskRedshift, diskRedshift);
                 SetFloat(material, Seed, GetSeed(data, objectIndex, 59));
-                SetFloat(material, Shader.PropertyToID("_Cutoff"), diskLensingCutoff);
+                SetFloat(
+                    material,
+                    Shader.PropertyToID("_Cutoff"),
+                    diskLensingCutoff);
                 return material;
             }
 
