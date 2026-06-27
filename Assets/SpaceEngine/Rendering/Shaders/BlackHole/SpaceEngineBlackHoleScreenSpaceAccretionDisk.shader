@@ -2,7 +2,6 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
 {
     Properties
     {
-        _DiskBaseColor ("Disk Base Color", Color) = (1.0, 0.72, 0.35, 1.0)
         _BlackHoleCenterWorld ("Black Hole Center World", Vector) = (0,0,0,1)
         _BlackHoleRadiusWorld ("Black Hole Radius World", Float) = 1.0
         _DiskInnerRadiusWorld ("Disk Inner Radius World", Float) = 1.2
@@ -44,7 +43,6 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
-                float4 _DiskBaseColor;
                 float4 _BlackHoleCenterWorld;
                 float _BlackHoleRadiusWorld;
                 float _DiskInnerRadiusWorld;
@@ -127,6 +125,36 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
                 float s = sin(angle);
                 float c = cos(angle);
                 return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+            }
+
+            float3 GetAccretionTemperatureColour(float temperature)
+            {
+                float normalizedTemperature = saturate(
+                    (max(temperature, 0.1) - 0.1) / 3.9);
+
+                float3 deepRed = float3(1.00, 0.035, 0.004);
+                float3 orange = float3(1.00, 0.32, 0.018);
+                float3 yellow = float3(1.00, 0.74, 0.22);
+                float3 white = float3(1.00, 0.94, 0.78);
+                float3 blueWhite = float3(0.72, 0.84, 1.00);
+
+                float3 colour = lerp(
+                    deepRed,
+                    orange,
+                    smoothstep(0.02, 0.26, normalizedTemperature));
+                colour = lerp(
+                    colour,
+                    yellow,
+                    smoothstep(0.20, 0.55, normalizedTemperature));
+                colour = lerp(
+                    colour,
+                    white,
+                    smoothstep(0.48, 0.75, normalizedTemperature));
+                colour = lerp(
+                    colour,
+                    blueWhite,
+                    smoothstep(0.76, 1.00, normalizedTemperature));
+                return colour;
             }
 
             bool IntersectDiskPlane(
@@ -236,15 +264,33 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
                 float outerFalloff = 1.0 - smoothstep(0.84, 1.0, radial01);
                 float innerFalloff = smoothstep(0.0, 0.028, radial01);
 
-                float3 outerColour = _DiskBaseColor.rgb * float3(0.24, 0.08, 0.03);
-                float3 warmColour = _DiskBaseColor.rgb * float3(1.95, 1.08, 0.40);
-                float3 hotColour = _DiskBaseColor.rgb * float3(4.5, 2.9, 1.45);
-                float3 whiteCore = float3(9.5, 9.1, 8.4);
+                float baseTemperature = max(_Temperature, 0.1);
+                float3 outerColour = GetAccretionTemperatureColour(
+                    baseTemperature * 0.38) * 0.30;
+                float3 warmColour = GetAccretionTemperatureColour(
+                    baseTemperature * 0.82) * 1.20;
+                float3 hotColour = GetAccretionTemperatureColour(
+                    baseTemperature * 1.45) * 3.10;
+                float3 coreColour = GetAccretionTemperatureColour(
+                    baseTemperature * 2.40) * 6.00;
 
-                float3 colour = lerp(outerColour, warmColour, smoothstep(0.0, 0.65, innerHeat));
-                colour = lerp(colour, hotColour, smoothstep(0.20, 0.95, innerHeat));
-                colour = lerp(colour, whiteCore, smoothstep(0.55, 1.0, innerHeat) * (0.55 + 0.45 * hotPatches));
-                colour = lerp(colour, warmColour * 0.82, (1.0 - cloudDensity) * 0.22);
+                float3 colour = lerp(
+                    outerColour,
+                    warmColour,
+                    smoothstep(0.0, 0.65, innerHeat));
+                colour = lerp(
+                    colour,
+                    hotColour,
+                    smoothstep(0.20, 0.95, innerHeat));
+                colour = lerp(
+                    colour,
+                    coreColour,
+                    smoothstep(0.55, 1.0, innerHeat) *
+                    (0.55 + 0.45 * hotPatches));
+                colour = lerp(
+                    colour,
+                    warmColour * 0.82,
+                    (1.0 - cloudDensity) * 0.22);
 
                 float2 tangentCoords = normalize(float2(-diskCoordinates.y, diskCoordinates.x));
                 float3 tangentWorld = normalize(_DiskPlaneRightWorld.xyz * tangentCoords.x + _DiskPlaneForwardWorld.xyz * tangentCoords.y);
@@ -252,7 +298,10 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
                 float3 recedingTint = float3(0.92, 0.56, 0.22);
                 float3 approachingTint = float3(1.12, 1.08, 1.02);
                 colour *= lerp(recedingTint, approachingTint, doppler * _Redshift);
-                colour = lerp(colour, whiteCore, frontWrap * 0.28 + hotPatches * frontWrap * 0.25);
+                colour = lerp(
+                    colour,
+                    coreColour,
+                    frontWrap * 0.28 + hotPatches * frontWrap * 0.25);
 
                 float density = cloudDensity * ringLanes;
                 density *= (0.62 + 0.38 * smokeWisps);
@@ -263,7 +312,12 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
                 brightness *= 1.0 + frontWrap * 0.55;
                 brightness += frontWrap * hotPatches * pow(1.0 - radial01, 1.8) * 0.65;
 
-                float alpha = saturate(density * (0.38 + 0.36 * innerHeat) * outerFalloff * innerFalloff + hotPatches * 0.12);
+                float alpha = saturate(
+                    density * (0.68 + 0.52 * innerHeat) *
+                    outerFalloff * innerFalloff +
+                    hotPatches * (0.20 + 0.12 * innerHeat));
+                alpha = max(alpha, frontWrap * hotPatches * 0.22);
+                alpha = clamp(alpha, 0.2, 0.7);
                 return half4(colour * brightness, alpha);
             }
 

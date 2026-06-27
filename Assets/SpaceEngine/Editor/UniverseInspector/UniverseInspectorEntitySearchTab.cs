@@ -7,6 +7,7 @@ using SpaceEngine.Runtime.Content.StellarObjects.Generation.Galaxies;
 using SpaceEngine.Runtime.Data;
 using SpaceEngine.Runtime.Data.Galaxy;
 using SpaceEngine.Runtime.Data.SolarSystem;
+using SpaceEngine.Runtime.Data.SolarSystem.Objects;
 using SpaceEngine.Runtime.Generation.Galaxy;
 using Unity.Mathematics;
 using UnityEditor;
@@ -21,8 +22,8 @@ namespace SpaceEngine.Editor.UniverseInspector
     /// </summary>
     public sealed class UniverseInspectorEntitySearchTab : IUniverseInspectorTab
     {
-        private const int MaximumSearchRadius = 8;
-        private const int MaximumResults = 128;
+        private const int MAXIMUM_SEARCH_RADIUS = 8;
+        private const int MAXIMUM_RESULTS = 128;
 
         private readonly List<SearchResult> results = new();
 
@@ -33,6 +34,9 @@ namespace SpaceEngine.Editor.UniverseInspector
         private int sectorRadius = 1;
         private int verticalSectorRadius;
         private bool requireAccretionDisk;
+        private bool useSurfaceTemperatureRange;
+        private double minimumSurfaceTemperatureKelvin;
+        private double maximumSurfaceTemperatureKelvin = 100_000.0;
         private string status;
 
         private Action<long, long> selectObject;
@@ -100,16 +104,36 @@ namespace SpaceEngine.Editor.UniverseInspector
                 "Horizontal Radius",
                 sectorRadius,
                 0,
-                MaximumSearchRadius);
+                MAXIMUM_SEARCH_RADIUS);
             verticalSectorRadius = EditorGUILayout.IntSlider(
                 "Vertical Radius",
                 verticalSectorRadius,
                 0,
-                MaximumSearchRadius);
+                MAXIMUM_SEARCH_RADIUS);
 
             requireAccretionDisk = EditorGUILayout.Toggle(
                 "Require Accretion Disk",
                 requireAccretionDisk);
+
+            useSurfaceTemperatureRange = EditorGUILayout.Toggle(
+                "Filter Surface Temperature",
+                useSurfaceTemperatureRange);
+
+            using (new EditorGUI.DisabledScope(!useSurfaceTemperatureRange))
+            {
+                EditorGUI.indentLevel++;
+                minimumSurfaceTemperatureKelvin = Math.Max(
+                    0.0,
+                    EditorGUILayout.DoubleField(
+                        "Minimum Temperature (K)",
+                        minimumSurfaceTemperatureKelvin));
+                maximumSurfaceTemperatureKelvin = Math.Max(
+                    minimumSurfaceTemperatureKelvin,
+                    EditorGUILayout.DoubleField(
+                        "Maximum Temperature (K)",
+                        maximumSurfaceTemperatureKelvin));
+                EditorGUI.indentLevel--;
+            }
 
             using (new EditorGUI.DisabledScope(entity == null))
             {
@@ -143,6 +167,15 @@ namespace SpaceEngine.Editor.UniverseInspector
                 EditorGUILayout.LabelField(
                     "Mass",
                     $"{result.Data.MassKg:E4} kg");
+
+                if (TryGetSurfaceTemperatureKelvin(
+                        result.Data,
+                        out var surfaceTemperatureKelvin))
+                {
+                    EditorGUILayout.LabelField(
+                        "Surface Temperature",
+                        $"{surfaceTemperatureKelvin:F0} K");
+                }
 
                 if (GUILayout.Button("Open Object"))
                     selectObject?.Invoke(
@@ -248,23 +281,23 @@ namespace SpaceEngine.Editor.UniverseInspector
             var horizontalRadius = Mathf.Clamp(
                 sectorRadius,
                 0,
-                MaximumSearchRadius);
+                MAXIMUM_SEARCH_RADIUS);
             var verticalRadius = Mathf.Clamp(
                 verticalSectorRadius,
                 0,
-                MaximumSearchRadius);
+                MAXIMUM_SEARCH_RADIUS);
 
             for (var z = -horizontalRadius;
-                 z <= horizontalRadius && results.Count < MaximumResults;
+                 z <= horizontalRadius && results.Count < MAXIMUM_RESULTS;
                  z++)
             {
                 for (var y = -verticalRadius;
-                     y <= verticalRadius && results.Count < MaximumResults;
+                     y <= verticalRadius && results.Count < MAXIMUM_RESULTS;
                      y++)
                 {
                     for (var x = -horizontalRadius;
                          x <= horizontalRadius &&
-                         results.Count < MaximumResults;
+                         results.Count < MAXIMUM_RESULTS;
                          x++)
                     {
                         if (x * x + z * z >
@@ -320,7 +353,7 @@ namespace SpaceEngine.Editor.UniverseInspector
         {
             for (var systemIndex = 0;
                  systemIndex < sector.SolarSystems.Length &&
-                 results.Count < MaximumResults;
+                 results.Count < MAXIMUM_RESULTS;
                  systemIndex++)
             {
                 var location = sector.SolarSystems[systemIndex];
@@ -341,7 +374,7 @@ namespace SpaceEngine.Editor.UniverseInspector
                 var objects = system.StellarObjects;
                 for (var objectIndex = 0;
                      objectIndex < objects.Length &&
-                     results.Count < MaximumResults;
+                     results.Count < MAXIMUM_RESULTS;
                      objectIndex++)
                 {
                     var data = objects[objectIndex];
@@ -354,6 +387,18 @@ namespace SpaceEngine.Editor.UniverseInspector
                         continue;
                     }
 
+                    if (useSurfaceTemperatureRange &&
+                        (!TryGetSurfaceTemperatureKelvin(
+                             data,
+                             out var surfaceTemperatureKelvin) ||
+                         surfaceTemperatureKelvin <
+                         minimumSurfaceTemperatureKelvin ||
+                         surfaceTemperatureKelvin >
+                         maximumSurfaceTemperatureKelvin))
+                    {
+                        continue;
+                    }
+
                     results.Add(new SearchResult(
                         location.SolarSystemID,
                         objectIndex,
@@ -361,6 +406,20 @@ namespace SpaceEngine.Editor.UniverseInspector
                         location.GalaxyLocalPositionLightYears));
                 }
             }
+        }
+
+        private static bool TryGetSurfaceTemperatureKelvin(
+            StellarObjectData data,
+            out double surfaceTemperatureKelvin)
+        {
+            if (data is StarData star)
+            {
+                surfaceTemperatureKelvin = star.SurfaceTemperatureKelvin;
+                return surfaceTemperatureKelvin >= 0.0;
+            }
+
+            surfaceTemperatureKelvin = 0.0;
+            return false;
         }
 
         private static bool GetBooleanProperty(

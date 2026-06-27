@@ -37,7 +37,7 @@ namespace SpaceEngine.Runtime.Content.StellarObjects.Generation.Stars
                 10_000_000.0,
                 StellarObjectGenerationUtility.MaximumUniverseAgeYears);
             var metallicity = random.NextDouble(0.01, 1.5);
-            var hasAccretionDisk = !isGalaxyCentre && HasAccretionDisk(
+            var hasAccretionDisk = isGalaxyCentre || HasAccretionDisk(
                 massSolar,
                 ageYears,
                 metallicity);
