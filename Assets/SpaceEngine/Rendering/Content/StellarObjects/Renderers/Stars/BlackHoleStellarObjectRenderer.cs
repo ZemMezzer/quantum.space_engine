@@ -37,6 +37,20 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             Shader.PropertyToID("_SwirlDirection");
         private static readonly int ApparentShadowScale =
             Shader.PropertyToID("_ApparentShadowScale");
+        private static readonly int BlackHoleCenterWorld =
+            Shader.PropertyToID("_BlackHoleCenterWorld");
+        private static readonly int BlackHoleRadiusWorld =
+            Shader.PropertyToID("_BlackHoleRadiusWorld");
+        private static readonly int AccretionRadiusWorld =
+            Shader.PropertyToID("_AccretionRadiusWorld");
+        private static readonly int DiskPlaneNormalWorld =
+            Shader.PropertyToID("_DiskPlaneNormalWorld");
+        private static readonly int DiskPlaneRightWorld =
+            Shader.PropertyToID("_DiskPlaneRightWorld");
+        private static readonly int DiskPlaneForwardWorld =
+            Shader.PropertyToID("_DiskPlaneForwardWorld");
+        private static readonly int DiskInnerRadiusWorld =
+            Shader.PropertyToID("_DiskInnerRadiusWorld");
 
         [Header("Horizon")]
         [SerializeField] private Color horizonColor = Color.black;
@@ -103,6 +117,21 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
         [SerializeField, Range(0.01f, 10.0f)]
         private float minimumLod1DiskAngularDiameterDegrees = 0.75f;
 
+        [SerializeField, Range(0.001f, 0.05f)]
+        private float diskLensingCutoff = 0.0025f;
+
+        [SerializeField, Range(0.0f, 24.0f)]
+        private float diskTwist = 28.0f;
+
+        [SerializeField, Range(0.1f, 4.0f)]
+        private float diskTemperature = 1.85f;
+
+        [SerializeField, Range(0.0f, 1.0f)]
+        private float diskAnimationSpeed = 0.12f;
+
+        [SerializeField, Range(0.0f, 1.0f)]
+        private float diskRedshift = 0.12f;
+
         public override IStellarObjectVisual CreateVisual(
             in StellarObjectRenderContext context)
         {
@@ -123,7 +152,12 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 swirlFalloff,
                 swirlDirection,
                 diskOuterRadiusInHorizonRadii,
-                minimumDiskAngularDiameterDegrees);
+                minimumDiskAngularDiameterDegrees,
+                Mathf.Clamp(diskLensingCutoff, 0.0001f, 0.05f),
+                Mathf.Clamp(diskTwist, -64.0f, 64.0f),
+                Mathf.Max(0.1f, diskTemperature),
+                Mathf.Clamp01(diskAnimationSpeed),
+                Mathf.Clamp01(diskRedshift));
         }
 
         public override bool TryGetDistantPointStyle(
@@ -150,17 +184,24 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             private const float MinimumViewportRadius = 0.000001f;
             private const float CameraInsideHorizonPadding = 1.001f;
             private const float LensingRadiusVisualMultiplier = 1.45f;
-            private const float DiskMeshInnerRadius = 1.2f;
-            private const float DiskMeshOuterRadius = 12.0f;
+            private const float DiskProxyScaleMultiplier = 2.8f;
+            private const float DiskInnerRadiusInHorizonRadii = 1.18f;
             private const int LensingDiscSegments = 96;
 
             private readonly Transform root;
             private readonly Transform lensingDisc;
             private readonly Transform disk;
             private readonly Mesh lensingDiscMesh;
+            private readonly Mesh diskProxyMesh;
             private readonly Material horizonInstance;
             private readonly Material lensingInstance;
             private readonly Material diskInstance;
+            private readonly Quaternion diskPlaneRotation;
+            private readonly float diskLensingCutoff;
+            private readonly float diskTwist;
+            private readonly float diskTemperature;
+            private readonly float diskAnimationSpeed;
+            private readonly float diskRedshift;
             private readonly float lensingRadiusInHorizonRadii;
             private readonly float diskOuterRadiusInHorizonRadii;
             private readonly float minimumHorizonAngularDiameterDegrees;
@@ -187,7 +228,12 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 float swirlFalloff,
                 float swirlDirection,
                 float diskOuterRadiusInHorizonRadii,
-                float minimumDiskAngularDiameterDegrees)
+                float minimumDiskAngularDiameterDegrees,
+                float diskLensingCutoff,
+                float diskTwist,
+                float diskTemperature,
+                float diskAnimationSpeed,
+                float diskRedshift)
             {
                 root = StellarObjectPresentationUtility.CreateRoot(
                     context,
@@ -207,6 +253,11 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                     Mathf.Max(
                         minimumDiskAngularDiameterDegrees,
                         minimumLod1DiskAngularDiameterDegrees));
+                this.diskLensingCutoff = diskLensingCutoff;
+                this.diskTwist = diskTwist;
+                this.diskTemperature = diskTemperature;
+                this.diskAnimationSpeed = diskAnimationSpeed;
+                this.diskRedshift = diskRedshift;
 
                 root.gameObject.AddComponent<MeshFilter>().sharedMesh =
                     StellarObjectPresentationUtility.GetSphereMesh();
@@ -232,6 +283,7 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                     layer = context.Layer
                 };
                 lensingDisc = lensingObject.transform;
+                lensingDisc.SetParent(root, false);
                 lensingDiscMesh = CreateLensingDiscMesh();
                 lensingObject.AddComponent<MeshFilter>().sharedMesh =
                     lensingDiscMesh;
@@ -261,20 +313,27 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 };
                 disk = diskObject.transform;
                 disk.SetParent(root, false);
-                disk.localRotation = GetDiskRotation(
+                diskPlaneRotation = GetDiskRotation(
                     blackHole,
                     context.ObjectIndex);
-
+                diskProxyMesh = CreateDiskProxyMesh();
                 diskObject.AddComponent<MeshFilter>().sharedMesh =
-                    CreateDiskMesh();
+                    diskProxyMesh;
 
                 var diskRenderer = diskObject.AddComponent<MeshRenderer>();
                 diskRenderer.shadowCastingMode = ShadowCastingMode.Off;
                 diskRenderer.receiveShadows = false;
-                diskInstance =
-                    StellarObjectPresentationUtility.CreateBlackHoleAccretionDiskMaterial(
-                        diskColor);
+                diskInstance = CreateScreenSpaceDiskMaterial(
+                    blackHole,
+                    context.ObjectIndex,
+                    diskColor,
+                    this.diskLensingCutoff,
+                    this.diskTwist,
+                    this.diskTemperature,
+                    this.diskAnimationSpeed,
+                    this.diskRedshift);
                 diskRenderer.sharedMaterial = diskInstance;
+                diskObject.SetActive(false);
             }
 
             public void SetVisible(bool isVisible)
@@ -286,6 +345,9 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
 
                 if (lensingDisc != null)
                     lensingDisc.gameObject.SetActive(false);
+
+                if (disk != null)
+                    disk.gameObject.SetActive(false);
             }
 
             public void Update(in StellarObjectVisualUpdateContext context)
@@ -325,23 +387,7 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                     physicalDiskRadius,
                     minimumDiskRadius);
 
-                // The disk mesh uses the same 1.2..12 radius range as its
-                // shader. Compensate for both the root's diameter scale and
-                // the outer mesh radius so the disk's outer edge is exactly
-                // lastDiskRadiusMeters from the black-hole centre.
-                var denominator = Math.Max(
-                    lastPresentationHorizonRadiusMeters * 2.0,
-                    0.0000001);
-                var localScale = (float)(
-                    lastDiskRadiusMeters /
-                    denominator /
-                    DiskMeshOuterRadius);
-                disk.localScale = Vector3.one * localScale;
-
-                StellarObjectPresentationUtility.SetFloat(
-                    diskInstance,
-                    SurfaceTime,
-                    (float)context.SimulationTimeSeconds);
+                UpdateScreenSpaceDisk(context);
             }
 
             public bool IsDistantPointReplacementReady(
@@ -366,9 +412,107 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 StellarObjectPresentationUtility.DestroyObject(lensingInstance);
                 StellarObjectPresentationUtility.DestroyObject(diskInstance);
                 StellarObjectPresentationUtility.DestroyObject(lensingDiscMesh);
-                StellarObjectPresentationUtility.DestroyObject(
-                    lensingDisc?.gameObject);
+                StellarObjectPresentationUtility.DestroyObject(diskProxyMesh);
                 StellarObjectPresentationUtility.DestroyObject(root?.gameObject);
+            }
+
+            private void UpdateScreenSpaceDisk(
+                in StellarObjectVisualUpdateContext context)
+            {
+                if (diskInstance == null || disk == null)
+                {
+                    if (disk != null)
+                        disk.gameObject.SetActive(false);
+                    return;
+                }
+
+                var camera = context.Camera != null
+                    ? context.Camera
+                    : Camera.main;
+                if (!isVisible || camera == null || root == null)
+                {
+                    disk.gameObject.SetActive(false);
+                    return;
+                }
+
+                var horizonWorldRadius = Mathf.Max(
+                    root.lossyScale.x * 0.5f,
+                    MinimumWorldRadius);
+                var diskWorldRadius = Mathf.Max(
+                    (float)(lastDiskRadiusMeters / context.MetersPerUnityUnit),
+                    horizonWorldRadius * 1.1f);
+                var proxyWorldRadius = Mathf.Max(
+                    diskWorldRadius * DiskProxyScaleMultiplier,
+                    horizonWorldRadius * 3.0f);
+
+                disk.SetPositionAndRotation(
+                    root.position,
+                    camera.transform.rotation);
+                SetWorldScale(
+                    disk,
+                    new Vector3(
+                        proxyWorldRadius,
+                        proxyWorldRadius,
+                        1.0f));
+                disk.gameObject.SetActive(true);
+
+                var diskNormalWorld = diskPlaneRotation * Vector3.up;
+                var diskRightWorld = diskPlaneRotation * Vector3.right;
+                var diskForwardWorld = diskPlaneRotation * Vector3.forward;
+
+                SetFloat(
+                    diskInstance,
+                    SurfaceTime,
+                    (float)context.SimulationTimeSeconds);
+                SetVector(
+                    diskInstance,
+                    BlackHoleCenterWorld,
+                    new Vector4(root.position.x, root.position.y, root.position.z, 1.0f));
+                SetFloat(diskInstance, BlackHoleRadiusWorld, horizonWorldRadius);
+                SetFloat(diskInstance, AccretionRadiusWorld, diskWorldRadius);
+                SetFloat(
+                    diskInstance,
+                    DiskInnerRadiusWorld,
+                    horizonWorldRadius * DiskInnerRadiusInHorizonRadii);
+                SetVector(
+                    diskInstance,
+                    DiskPlaneNormalWorld,
+                    new Vector4(diskNormalWorld.x, diskNormalWorld.y, diskNormalWorld.z, 0.0f));
+                SetVector(
+                    diskInstance,
+                    DiskPlaneRightWorld,
+                    new Vector4(diskRightWorld.x, diskRightWorld.y, diskRightWorld.z, 0.0f));
+                SetVector(
+                    diskInstance,
+                    DiskPlaneForwardWorld,
+                    new Vector4(diskForwardWorld.x, diskForwardWorld.y, diskForwardWorld.z, 0.0f));
+            }
+
+            private static void SetWorldScale(
+                Transform transform,
+                Vector3 worldScale)
+            {
+                if (transform == null)
+                    return;
+
+                var parent = transform.parent;
+                if (parent == null)
+                {
+                    transform.localScale = worldScale;
+                    return;
+                }
+
+                var parentScale = parent.lossyScale;
+                transform.localScale = new Vector3(
+                    worldScale.x / Mathf.Max(
+                        Mathf.Abs(parentScale.x),
+                        MinimumWorldRadius),
+                    worldScale.y / Mathf.Max(
+                        Mathf.Abs(parentScale.y),
+                        MinimumWorldRadius),
+                    worldScale.z / Mathf.Max(
+                        Mathf.Abs(parentScale.z),
+                        MinimumWorldRadius));
             }
 
             private void UpdateLensing(
@@ -436,7 +580,9 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 lensingDisc.SetPositionAndRotation(
                     planePosition,
                     camera.transform.rotation);
-                lensingDisc.localScale = Vector3.one * lensWorldRadius;
+                SetWorldScale(
+                    lensingDisc,
+                    Vector3.one * lensWorldRadius);
                 lensingDisc.gameObject.SetActive(true);
 
                 SetFloat(
@@ -577,7 +723,13 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 var shader = Shader.Find(
                     "SpaceEngine/Streaming/Black Hole Lens");
                 if (shader == null)
+                {
+                    Debug.LogError(
+                        "SpaceEngine black-hole disk shader was not found: " +
+                        "SpaceEngine/Streaming/Black Hole Screen Space " +
+                        "Accretion Disk.");
                     return null;
+                }
 
                 var material = new Material(shader)
                 {
@@ -594,6 +746,42 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 SetFloat(material, SwirlStrength, swirlStrength);
                 SetFloat(material, SwirlFalloff, swirlFalloff);
                 SetFloat(material, SwirlDirection, swirlDirection);
+                return material;
+            }
+
+            private static Material CreateScreenSpaceDiskMaterial(
+                BlackHoleData data,
+                int objectIndex,
+                Color diskColor,
+                float cutoff,
+                float twist,
+                float temperature,
+                float speed,
+                float redshift)
+            {
+                var shader = Shader.Find(
+                    "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk");
+                if (shader == null)
+                {
+                    Debug.LogError(
+                        "SpaceEngine black-hole disk shader was not found: " +
+                        "SpaceEngine/Streaming/Black Hole Screen Space " +
+                        "Accretion Disk.");
+                    return null;
+                }
+
+                var material = new Material(shader)
+                {
+                    name = "Black Hole Screen Space Accretion Disk Material",
+                    renderQueue = 3125
+                };
+                SetColor(material, Shader.PropertyToID("_DiskBaseColor"), diskColor);
+                SetFloat(material, Shader.PropertyToID("_Cutoff"), cutoff);
+                SetFloat(material, Shader.PropertyToID("_Twist"), twist);
+                SetFloat(material, Shader.PropertyToID("_Temperature"), temperature);
+                SetFloat(material, Shader.PropertyToID("_Speed"), speed);
+                SetFloat(material, Shader.PropertyToID("_Redshift"), redshift);
+                SetFloat(material, Seed, GetSeed(data, objectIndex, 59));
                 return material;
             }
 
@@ -720,52 +908,28 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 return mesh;
             }
 
-            private static Mesh CreateDiskMesh()
+            private static Mesh CreateDiskProxyMesh()
             {
-                const int segments = 64;
-                const float inner = DiskMeshInnerRadius;
-                const float outer = DiskMeshOuterRadius;
-
-                var vertices = new Vector3[(segments + 1) * 2];
-                var uv = new Vector2[vertices.Length];
-                var triangles = new int[segments * 6];
-
-                for (var index = 0; index <= segments; index++)
-                {
-                    var t = index / (float)segments;
-                    var angle = t * Mathf.PI * 2.0f;
-                    var cosine = Mathf.Cos(angle);
-                    var sine = Mathf.Sin(angle);
-
-                    var innerIndex = index * 2;
-                    var outerIndex = innerIndex + 1;
-                    vertices[innerIndex] =
-                        new Vector3(cosine * inner, 0.0f, sine * inner);
-                    vertices[outerIndex] =
-                        new Vector3(cosine * outer, 0.0f, sine * outer);
-                    uv[innerIndex] = new Vector2(t, 0.0f);
-                    uv[outerIndex] = new Vector2(t, 1.0f);
-
-                    if (index == segments)
-                        continue;
-
-                    var triangle = index * 6;
-                    triangles[triangle] = innerIndex;
-                    triangles[triangle + 1] = outerIndex;
-                    triangles[triangle + 2] = innerIndex + 2;
-                    triangles[triangle + 3] = outerIndex;
-                    triangles[triangle + 4] = innerIndex + 3;
-                    triangles[triangle + 5] = innerIndex + 2;
-                }
-
                 var mesh = new Mesh
                 {
-                    name = "Black Hole Accretion Disk",
-                    vertices = vertices,
-                    uv = uv,
-                    triangles = triangles
+                    name = "Black Hole Accretion Disk Proxy"
                 };
-                mesh.RecalculateNormals();
+                mesh.vertices = new[]
+                {
+                    new Vector3(-1.0f, -1.0f, 0.0f),
+                    new Vector3( 1.0f, -1.0f, 0.0f),
+                    new Vector3( 1.0f,  1.0f, 0.0f),
+                    new Vector3(-1.0f,  1.0f, 0.0f)
+                };
+                mesh.uv = new[]
+                {
+                    new Vector2(0.0f, 0.0f),
+                    new Vector2(1.0f, 0.0f),
+                    new Vector2(1.0f, 1.0f),
+                    new Vector2(0.0f, 1.0f)
+                };
+                mesh.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+                mesh.bounds = new Bounds(Vector3.zero, Vector3.one * 1000000.0f);
                 return mesh;
             }
         }
