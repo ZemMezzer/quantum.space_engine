@@ -13,6 +13,14 @@ MonoBehaviour:
   m_Name: Black Hole Renderer
   m_EditorClassIdentifier: com.tiredsiren.quantum.space_engine.rendering::SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars.BlackHoleStellarObjectRenderer
   horizonColor: {r: 0, g: 0, b: 0, a: 1}
+  lensingRadiusInHorizonRadii: 4
+  lensingStrength: 0.95
+  lensEdgeSoftness: 0.2
+  lensRingIntensity: 0.16
+  lensRingColor: {r: 0.78, g: 0.88, b: 1, a: 1}
+  swirlStrength: 3.2
+  swirlFalloff: 1.75
+  swirlDirection: 1
   accretionDiskColor: {r: 1, g: 0.55, b: 0.15, a: 1}
   diskOuterRadiusInHorizonRadii: 20
   minimumDiskAngularDiameterDegrees: 0.2

@@ -41,6 +41,13 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
         [Header("Horizon")]
         [SerializeField] private Color horizonColor = Color.black;
 
+        [Tooltip(
+            "Smallest visible angular diameter of the horizon while LOD 1 is " +
+            "active. This keeps the black hole readable before its real " +
+            "physical radius is large enough on screen.")]
+        [SerializeField, Range(0.01f, 5.0f)]
+        private float minimumHorizonAngularDiameterDegrees = 0.35f;
+
         [Header("Gravitational lensing")]
         [Tooltip(
             "Outer radius of the lensing field relative to the visible " +
@@ -89,6 +96,13 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
         [SerializeField, Range(0.001f, 10.0f)]
         private float minimumDiskAngularDiameterDegrees = 0.20f;
 
+        [Tooltip(
+            "LOD 1 safety floor for the visible accretion disk. It is used " +
+            "even when an existing renderer asset still has an older, very " +
+            "small Minimum Disk Angular Diameter value.")]
+        [SerializeField, Range(0.01f, 10.0f)]
+        private float minimumLod1DiskAngularDiameterDegrees = 0.75f;
+
         public override IStellarObjectVisual CreateVisual(
             in StellarObjectRenderContext context)
         {
@@ -99,6 +113,8 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 horizonColor,
                 accretionDiskColor,
                 lensRingColor,
+                minimumHorizonAngularDiameterDegrees,
+                minimumLod1DiskAngularDiameterDegrees,
                 lensingRadiusInHorizonRadii,
                 lensingStrength,
                 lensEdgeSoftness,
@@ -134,6 +150,8 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             private const float MinimumViewportRadius = 0.000001f;
             private const float CameraInsideHorizonPadding = 1.001f;
             private const float LensingRadiusVisualMultiplier = 1.45f;
+            private const float DiskMeshInnerRadius = 1.2f;
+            private const float DiskMeshOuterRadius = 12.0f;
             private const int LensingDiscSegments = 96;
 
             private readonly Transform root;
@@ -145,9 +163,11 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             private readonly Material diskInstance;
             private readonly float lensingRadiusInHorizonRadii;
             private readonly float diskOuterRadiusInHorizonRadii;
+            private readonly float minimumHorizonAngularDiameterDegrees;
             private readonly float minimumDiskAngularDiameterDegrees;
 
             private bool isVisible;
+            private double lastPresentationHorizonRadiusMeters;
             private double lastDiskRadiusMeters;
             private double lastDistanceMeters;
 
@@ -157,6 +177,8 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 Color horizonColor,
                 Color diskColor,
                 Color lensRingColor,
+                float minimumHorizonAngularDiameterDegrees,
+                float minimumLod1DiskAngularDiameterDegrees,
                 float lensingRadiusInHorizonRadii,
                 float lensingStrength,
                 float lensEdgeSoftness,
@@ -177,9 +199,14 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 this.diskOuterRadiusInHorizonRadii = Mathf.Max(
                     1.1f,
                     diskOuterRadiusInHorizonRadii);
+                this.minimumHorizonAngularDiameterDegrees = Mathf.Max(
+                    0.01f,
+                    minimumHorizonAngularDiameterDegrees);
                 this.minimumDiskAngularDiameterDegrees = Mathf.Max(
-                    0.001f,
-                    minimumDiskAngularDiameterDegrees);
+                    0.01f,
+                    Mathf.Max(
+                        minimumDiskAngularDiameterDegrees,
+                        minimumLod1DiskAngularDiameterDegrees));
 
                 root.gameObject.AddComponent<MeshFilter>().sharedMesh =
                     StellarObjectPresentationUtility.GetSphereMesh();
@@ -265,10 +292,22 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             {
                 lastDistanceMeters = context.DistanceToCameraMeters;
 
+                var physicalHorizonRadius = Math.Max(
+                    context.Data.RadiusMeters,
+                    0.0);
+                var minimumHorizonRadius =
+                    StellarObjectPresentationUtility
+                        .GetMinimumAngularRadiusMeters(
+                            context.DistanceToCameraMeters,
+                            minimumHorizonAngularDiameterDegrees);
+                lastPresentationHorizonRadiusMeters = Math.Max(
+                    physicalHorizonRadius,
+                    minimumHorizonRadius);
+
                 StellarObjectPresentationUtility.ApplyTransform(
                     root,
                     context.RelativePositionMeters,
-                    context.Data.RadiusMeters,
+                    lastPresentationHorizonRadiusMeters,
                     context.MetersPerUnityUnit);
 
                 UpdateLensing(context);
@@ -278,18 +317,25 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
 
                 var physicalDiskRadius = context.Data.RadiusMeters *
                                          diskOuterRadiusInHorizonRadii;
-                var angularRadius = StellarObjectPresentationUtility
+                var minimumDiskRadius = StellarObjectPresentationUtility
                     .GetMinimumAngularRadiusMeters(
                         context.DistanceToCameraMeters,
                         minimumDiskAngularDiameterDegrees);
                 lastDiskRadiusMeters = Math.Max(
                     physicalDiskRadius,
-                    angularRadius);
+                    minimumDiskRadius);
 
+                // The disk mesh uses the same 1.2..12 radius range as its
+                // shader. Compensate for both the root's diameter scale and
+                // the outer mesh radius so the disk's outer edge is exactly
+                // lastDiskRadiusMeters from the black-hole centre.
                 var denominator = Math.Max(
-                    context.Data.RadiusMeters,
+                    lastPresentationHorizonRadiusMeters * 2.0,
                     0.0000001);
-                var localScale = (float)(lastDiskRadiusMeters / denominator);
+                var localScale = (float)(
+                    lastDiskRadiusMeters /
+                    denominator /
+                    DiskMeshOuterRadius);
                 disk.localScale = Vector3.one * localScale;
 
                 StellarObjectPresentationUtility.SetFloat(
@@ -301,10 +347,15 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             public bool IsDistantPointReplacementReady(
                 float requiredAngularDiameterDegrees)
             {
-                return disk != null &&
-                       StellarObjectPresentationUtility
+                var visibleRadius = disk == null
+                    ? lastPresentationHorizonRadiusMeters
+                    : Math.Max(
+                        lastPresentationHorizonRadiusMeters,
+                        lastDiskRadiusMeters);
+
+                return StellarObjectPresentationUtility
                            .GetAngularDiameterDegrees(
-                               lastDiskRadiusMeters,
+                               visibleRadius,
                                lastDistanceMeters) >=
                        requiredAngularDiameterDegrees;
             }
@@ -494,8 +545,8 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                     return;
 
                 var photonColor = data.HasAccretionDisk
-                    ? Color.black
-                    : new Color(0.07f, 0.12f, 0.20f, 1.0f);
+                    ? new Color(0.92f, 0.78f, 0.48f, 1.0f)
+                    : new Color(0.20f, 0.38f, 0.68f, 1.0f);
                 SetColor(
                     material,
                     Shader.PropertyToID("_PhotonRingColor"),
@@ -503,7 +554,7 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 SetFloat(
                     material,
                     Shader.PropertyToID("_PhotonRingIntensity"),
-                    data.HasAccretionDisk ? 0.0f : 0.08f);
+                    data.HasAccretionDisk ? 0.28f : 0.12f);
                 SetFloat(material, ApparentShadowScale, 1.0f);
                 SetFloat(material, Seed, GetSeed(data, objectIndex, 43));
 
@@ -672,8 +723,8 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             private static Mesh CreateDiskMesh()
             {
                 const int segments = 64;
-                const float inner = 0.16f;
-                const float outer = 1.0f;
+                const float inner = DiskMeshInnerRadius;
+                const float outer = DiskMeshOuterRadius;
 
                 var vertices = new Vector3[(segments + 1) * 2];
                 var uv = new Vector2[vertices.Length];
