@@ -90,6 +90,9 @@ namespace SpaceEngine.Editor.UniverseInspector
             EditorGUILayout.LabelField("Mass", $"{stellarObject.MassKg:E6} kg");
             EditorGUILayout.LabelField("Radius", $"{stellarObject.RadiusMeters:E6} m");
             EditorGUILayout.LabelField(
+                "Temperature",
+                $"{stellarObject.TemperatureKelvin:F2} K");
+            EditorGUILayout.LabelField(
                 "Luminosity",
                 $"{stellarObject.LuminosityWatts:E6} W");
 

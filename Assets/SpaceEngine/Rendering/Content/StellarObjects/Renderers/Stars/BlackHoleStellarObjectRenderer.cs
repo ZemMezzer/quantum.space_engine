@@ -52,6 +52,11 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
         private static readonly int DiskInnerRadiusWorld =
             Shader.PropertyToID("_DiskInnerRadiusWorld");
 
+        private const float MinimumDiskShaderTemperature = 0.1f;
+        private const float MaximumDiskShaderTemperature = 4.0f;
+        private const double MinimumDiskTemperatureKelvin = 1_200.0;
+        private const double MaximumDiskTemperatureKelvin = 20_000.0;
+
         [Header("Horizon")]
         [SerializeField] private Color horizonColor = Color.black;
 
@@ -120,13 +125,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
         [SerializeField, Range(0.0f, 24.0f)]
         private float diskTwist = 28.0f;
 
-        [Tooltip(
-            "Controls the procedural black-body colour gradient of the " +
-            "accretion disk. Lower values are redder; higher values become " +
-            "yellow-white and then blue-white.")]
-        [SerializeField, Range(0.1f, 4.0f)]
-        private float diskTemperature = 1.85f;
-
         [SerializeField, Range(0.0f, 1.0f)]
         private float diskAnimationSpeed = 0.12f;
 
@@ -155,7 +153,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 minimumDiskAngularDiameterDegrees,
                 Mathf.Clamp(diskLensingCutoff, 0.0001f, 0.05f),
                 Mathf.Clamp(diskTwist, -64.0f, 64.0f),
-                Mathf.Max(0.1f, diskTemperature),
                 Mathf.Clamp01(diskAnimationSpeed),
                 Mathf.Clamp01(diskRedshift));
         }
@@ -173,9 +170,23 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             }
 
             var blackHole = (BlackHoleData)data;
-            color = GetAccretionDiskColour(diskTemperature * 1.25f);
+            color = GetAccretionDiskColour(
+                GetDiskShaderTemperature(blackHole.TemperatureKelvin) *
+                1.25f);
             intensity = blackHole.HasAccretionDisk ? 2.5f : 0.4f;
             return true;
+        }
+
+        private static float GetDiskShaderTemperature(
+            double temperatureKelvin)
+        {
+            return Mathf.Lerp(
+                MinimumDiskShaderTemperature,
+                MaximumDiskShaderTemperature,
+                Mathf.InverseLerp(
+                    (float)MinimumDiskTemperatureKelvin,
+                    (float)MaximumDiskTemperatureKelvin,
+                    (float)Math.Max(0.0, temperatureKelvin)));
         }
 
         private static Color GetAccretionDiskColour(float temperature)
@@ -242,7 +253,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
             private readonly Quaternion diskPlaneRotation;
             private readonly float diskLensingCutoff;
             private readonly float diskTwist;
-            private readonly float diskTemperature;
             private readonly float diskAnimationSpeed;
             private readonly float diskRedshift;
             private readonly float lensingRadiusInHorizonRadii;
@@ -273,7 +283,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 float minimumDiskAngularDiameterDegrees,
                 float diskLensingCutoff,
                 float diskTwist,
-                float diskTemperature,
                 float diskAnimationSpeed,
                 float diskRedshift)
             {
@@ -297,7 +306,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                         minimumLod1DiskAngularDiameterDegrees));
                 this.diskLensingCutoff = diskLensingCutoff;
                 this.diskTwist = diskTwist;
-                this.diskTemperature = diskTemperature;
                 this.diskAnimationSpeed = diskAnimationSpeed;
                 this.diskRedshift = diskRedshift;
 
@@ -370,7 +378,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                     context.ObjectIndex,
                     this.diskLensingCutoff,
                     this.diskTwist,
-                    this.diskTemperature,
                     this.diskAnimationSpeed,
                     this.diskRedshift);
                 diskRenderer.sharedMaterial = diskInstance;
@@ -795,7 +802,6 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 int objectIndex,
                 float cutoff,
                 float twist,
-                float temperature,
                 float speed,
                 float redshift)
             {
@@ -817,7 +823,11 @@ namespace SpaceEngine.Rendering.Content.StellarObjects.Renderers.Stars
                 };
                 SetFloat(material, Shader.PropertyToID("_Cutoff"), cutoff);
                 SetFloat(material, Shader.PropertyToID("_Twist"), twist);
-                SetFloat(material, Shader.PropertyToID("_Temperature"), temperature);
+                SetFloat(
+                    material,
+                    Shader.PropertyToID("_Temperature"),
+                    BlackHoleStellarObjectRenderer.GetDiskShaderTemperature(
+                        data.TemperatureKelvin));
                 SetFloat(material, Shader.PropertyToID("_Speed"), speed);
                 SetFloat(material, Shader.PropertyToID("_Redshift"), redshift);
                 SetFloat(material, Seed, GetSeed(data, objectIndex, 59));

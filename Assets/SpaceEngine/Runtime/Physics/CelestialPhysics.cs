@@ -1,4 +1,5 @@
 using SpaceEngine.Runtime.Data;
+using Unity.Mathematics;
 using UnityEngine;
 
 namespace SpaceEngine.Runtime.Physics
@@ -52,6 +53,32 @@ namespace SpaceEngine.Runtime.Physics
         public abstract bool TryGetMoveData(
             CelestialBodyCoordinatesData bodyCoordinates,
             out CelestialPositionData positionData);
+
+        /// <summary>
+        /// Returns local radiative-equilibrium temperature in kelvin at a
+        /// solar-system-local position. The implementation derives it from
+        /// the generated luminosities at the current simulation time.
+        /// </summary>
+        internal abstract double GetTemperatureLocal(
+            in CoordinatesData coordinates,
+            double3 solarSystemLocalPositionMeters);
+
+        /// <summary>
+        /// Returns the resultant gravitational acceleration vector in m/s² at
+        /// a solar-system-local position. Its direction points toward the
+        /// sources of gravity.
+        /// </summary>
+        internal abstract double3 GetGravitationVector(
+            in CoordinatesData coordinates,
+            double3 solarSystemLocalPositionMeters);
+
+        /// <summary>
+        /// Returns the magnitude of local gravitational acceleration in
+        /// standard Earth gravities (g).
+        /// </summary>
+        internal abstract double GetGravitationForce(
+            in CoordinatesData coordinates,
+            double3 solarSystemLocalPositionMeters);
 
         protected virtual void OnInitialize()
         {

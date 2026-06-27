@@ -1,5 +1,6 @@
 using System;
 using SpaceEngine.Runtime.Data;
+using SpaceEngine.Runtime.Data.SolarSystem;
 using SpaceEngine.Runtime.Physics;
 using Unity.Mathematics;
 using UnityEngine;
@@ -75,6 +76,60 @@ namespace SpaceEngine.Runtime.Core
             return Physics.TryGetMoveData(
                 bodyCoordinates,
                 out positionData);
+        }
+
+        /// <summary>
+        /// Returns the current local radiative-equilibrium temperature in
+        /// kelvin. It is evaluated from the generated objects in the active
+        /// system at the anchor's present position.
+        ///
+        /// An anchor that has not yet entered a solar-system frame is simply
+        /// in deep space: this returns the cosmic microwave background instead
+        /// of throwing.
+        /// </summary>
+        public double GetTemperatureLocal()
+        {
+            ThrowIfDisposed();
+
+            return IsConfigured
+                ? Physics.GetTemperatureLocal(
+                    Coordinates,
+                    SolarSystemLocalPositionMeters)
+                : StellarObjectData.CosmicBackgroundTemperatureKelvin;
+        }
+
+        /// <summary>
+        /// Returns the resultant local gravitational acceleration vector in
+        /// m/s². The vector points toward the generated gravitating bodies.
+        ///
+        /// An anchor without an active solar-system frame is treated as deep
+        /// space and returns a zero vector.
+        /// </summary>
+        public double3 GetGravitationVector()
+        {
+            ThrowIfDisposed();
+
+            return IsConfigured
+                ? Physics.GetGravitationVector(
+                    Coordinates,
+                    SolarSystemLocalPositionMeters)
+                : double3.zero;
+        }
+
+        /// <summary>
+        /// Returns the magnitude of local gravitational acceleration in
+        /// standard Earth gravities (g). An unconfigured anchor is in deep
+        /// space and therefore returns zero.
+        /// </summary>
+        public double GetGravitationForce()
+        {
+            ThrowIfDisposed();
+
+            return IsConfigured
+                ? Physics.GetGravitationForce(
+                    Coordinates,
+                    SolarSystemLocalPositionMeters)
+                : 0.0;
         }
 
         /// <summary>

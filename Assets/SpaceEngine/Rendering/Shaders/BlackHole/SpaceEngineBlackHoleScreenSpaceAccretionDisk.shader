@@ -317,7 +317,7 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
                     outerFalloff * innerFalloff +
                     hotPatches * (0.20 + 0.12 * innerHeat));
                 alpha = max(alpha, frontWrap * hotPatches * 0.22);
-                alpha = clamp(alpha, 0.2, 0.7);
+                alpha = clamp(alpha, 0.0, 0.7);
                 return half4(colour * brightness, alpha);
             }
 

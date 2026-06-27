@@ -5,7 +5,13 @@ namespace SpaceEngine.Runtime.Data.SolarSystem.Objects
     {
         public double DensityKgPerCubicMeter { get; }
         public double SurfaceGravityMetersPerSecondSquared { get; }
-        public double SurfaceTemperatureKelvin { get; }
+
+        /// <summary>
+        /// Backwards-compatible name for the common characteristic
+        /// temperature. Planet temperatures are surface temperatures.
+        /// </summary>
+        public double SurfaceTemperatureKelvin => TemperatureKelvin;
+
         public double AtmospherePressurePascals { get; }
         public double WaterCoverage { get; }
         public double IceCoverage { get; }
@@ -28,12 +34,16 @@ namespace SpaceEngine.Runtime.Data.SolarSystem.Objects
             bool hasAtmosphere,
             bool hasRings,
             OrbitData orbit)
-            : base(massKg, radiusMeters, 0.0, orbit)
+            : base(
+                massKg,
+                radiusMeters,
+                0.0,
+                surfaceTemperatureKelvin,
+                orbit)
         {
             DensityKgPerCubicMeter = densityKgPerCubicMeter;
             SurfaceGravityMetersPerSecondSquared =
                 surfaceGravityMetersPerSecondSquared;
-            SurfaceTemperatureKelvin = surfaceTemperatureKelvin;
             AtmospherePressurePascals = atmospherePressurePascals;
             WaterCoverage = waterCoverage;
             IceCoverage = iceCoverage;
@@ -50,7 +60,7 @@ namespace SpaceEngine.Runtime.Data.SolarSystem.Objects
                 RadiusMeters,
                 DensityKgPerCubicMeter,
                 SurfaceGravityMetersPerSecondSquared,
-                SurfaceTemperatureKelvin,
+                TemperatureKelvin,
                 AtmospherePressurePascals,
                 WaterCoverage,
                 IceCoverage,

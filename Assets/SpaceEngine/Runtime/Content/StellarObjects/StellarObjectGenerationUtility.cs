@@ -1,5 +1,6 @@
 using System;
 using SpaceEngine.Runtime.Data;
+using SpaceEngine.Runtime.Data.SolarSystem;
 using SpaceEngine.Runtime.Data.SolarSystem.Objects;
 using SpaceEngine.Runtime.Utils;
 
@@ -44,6 +45,7 @@ namespace SpaceEngine.Runtime.Content.StellarObjects
             double rotationPeriodSeconds,
             double ageYears,
             double metallicity,
+            double temperatureKelvin,
             bool hasAccretionDisk,
             OrbitData orbit)
         {
@@ -53,8 +55,26 @@ namespace SpaceEngine.Runtime.Content.StellarObjects
                 rotationPeriodSeconds,
                 ageYears,
                 metallicity,
+                temperatureKelvin,
                 hasAccretionDisk,
                 orbit);
+        }
+
+        public static double GetHawkingTemperatureKelvin(double massKg)
+        {
+            const double reducedPlanckConstant = 1.054571817e-34;
+            const double speedOfLightMetersPerSecond = 299_792_458.0;
+            const double BoltzmannConstant = 1.380649e-23;
+
+            if (massKg <= 0.0)
+                return StellarObjectData.CosmicBackgroundTemperatureKelvin;
+
+            return reducedPlanckConstant *
+                   speedOfLightMetersPerSecond *
+                   speedOfLightMetersPerSecond *
+                   speedOfLightMetersPerSecond /
+                   (8.0 * Math.PI * GravitationalConstant * massKg *
+                    BoltzmannConstant);
         }
 
         public static PlanetData CreatePlanet(

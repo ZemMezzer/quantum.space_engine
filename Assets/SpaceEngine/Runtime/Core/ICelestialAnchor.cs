@@ -25,6 +25,10 @@ namespace SpaceEngine.Runtime.Core
             CelestialBodyCoordinatesData bodyCoordinates,
             out CelestialPositionData positionData);
 
+        double GetTemperatureLocal();
+        double3 GetGravitationVector();
+        double GetGravitationForce();
+
         void Activate();
         void Refresh();
         void Move(CelestialPositionData positionData);

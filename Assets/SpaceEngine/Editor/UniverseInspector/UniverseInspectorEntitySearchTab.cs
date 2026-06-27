@@ -7,7 +7,6 @@ using SpaceEngine.Runtime.Content.StellarObjects.Generation.Galaxies;
 using SpaceEngine.Runtime.Data;
 using SpaceEngine.Runtime.Data.Galaxy;
 using SpaceEngine.Runtime.Data.SolarSystem;
-using SpaceEngine.Runtime.Data.SolarSystem.Objects;
 using SpaceEngine.Runtime.Generation.Galaxy;
 using Unity.Mathematics;
 using UnityEditor;
@@ -34,9 +33,9 @@ namespace SpaceEngine.Editor.UniverseInspector
         private int sectorRadius = 1;
         private int verticalSectorRadius;
         private bool requireAccretionDisk;
-        private bool useSurfaceTemperatureRange;
-        private double minimumSurfaceTemperatureKelvin;
-        private double maximumSurfaceTemperatureKelvin = 100_000.0;
+        private bool useTemperatureRange;
+        private double minimumTemperatureKelvin;
+        private double maximumTemperatureKelvin = 100_000.0;
         private string status;
 
         private Action<long, long> selectObject;
@@ -115,23 +114,23 @@ namespace SpaceEngine.Editor.UniverseInspector
                 "Require Accretion Disk",
                 requireAccretionDisk);
 
-            useSurfaceTemperatureRange = EditorGUILayout.Toggle(
-                "Filter Surface Temperature",
-                useSurfaceTemperatureRange);
+            useTemperatureRange = EditorGUILayout.Toggle(
+                "Filter Temperature",
+                useTemperatureRange);
 
-            using (new EditorGUI.DisabledScope(!useSurfaceTemperatureRange))
+            using (new EditorGUI.DisabledScope(!useTemperatureRange))
             {
                 EditorGUI.indentLevel++;
-                minimumSurfaceTemperatureKelvin = Math.Max(
+                minimumTemperatureKelvin = Math.Max(
                     0.0,
                     EditorGUILayout.DoubleField(
                         "Minimum Temperature (K)",
-                        minimumSurfaceTemperatureKelvin));
-                maximumSurfaceTemperatureKelvin = Math.Max(
-                    minimumSurfaceTemperatureKelvin,
+                        minimumTemperatureKelvin));
+                maximumTemperatureKelvin = Math.Max(
+                    minimumTemperatureKelvin,
                     EditorGUILayout.DoubleField(
                         "Maximum Temperature (K)",
-                        maximumSurfaceTemperatureKelvin));
+                        maximumTemperatureKelvin));
                 EditorGUI.indentLevel--;
             }
 
@@ -168,14 +167,9 @@ namespace SpaceEngine.Editor.UniverseInspector
                     "Mass",
                     $"{result.Data.MassKg:E4} kg");
 
-                if (TryGetSurfaceTemperatureKelvin(
-                        result.Data,
-                        out var surfaceTemperatureKelvin))
-                {
-                    EditorGUILayout.LabelField(
-                        "Surface Temperature",
-                        $"{surfaceTemperatureKelvin:F0} K");
-                }
+                EditorGUILayout.LabelField(
+                    "Temperature",
+                    $"{result.Data.TemperatureKelvin:F0} K");
 
                 if (GUILayout.Button("Open Object"))
                     selectObject?.Invoke(
@@ -387,14 +381,9 @@ namespace SpaceEngine.Editor.UniverseInspector
                         continue;
                     }
 
-                    if (useSurfaceTemperatureRange &&
-                        (!TryGetSurfaceTemperatureKelvin(
-                             data,
-                             out var surfaceTemperatureKelvin) ||
-                         surfaceTemperatureKelvin <
-                         minimumSurfaceTemperatureKelvin ||
-                         surfaceTemperatureKelvin >
-                         maximumSurfaceTemperatureKelvin))
+                    if (useTemperatureRange &&
+                        (data.TemperatureKelvin < minimumTemperatureKelvin ||
+                         data.TemperatureKelvin > maximumTemperatureKelvin))
                     {
                         continue;
                     }
@@ -408,19 +397,6 @@ namespace SpaceEngine.Editor.UniverseInspector
             }
         }
 
-        private static bool TryGetSurfaceTemperatureKelvin(
-            StellarObjectData data,
-            out double surfaceTemperatureKelvin)
-        {
-            if (data is StarData star)
-            {
-                surfaceTemperatureKelvin = star.SurfaceTemperatureKelvin;
-                return surfaceTemperatureKelvin >= 0.0;
-            }
-
-            surfaceTemperatureKelvin = 0.0;
-            return false;
-        }
 
         private static bool GetBooleanProperty(
             StellarObjectData data,

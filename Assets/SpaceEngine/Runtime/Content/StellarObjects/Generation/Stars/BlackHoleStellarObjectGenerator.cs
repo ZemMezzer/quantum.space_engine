@@ -41,15 +41,41 @@ namespace SpaceEngine.Runtime.Content.StellarObjects.Generation.Stars
                 massSolar,
                 ageYears,
                 metallicity);
+            var rotationPeriodSeconds = random.NextDouble(0.001, 10.0);
+            var temperatureKelvin = hasAccretionDisk
+                ? GetAccretionDiskTemperatureKelvin(massSolar, ref random)
+                : StellarObjectGenerationUtility.GetHawkingTemperatureKelvin(
+                    massKg);
 
             return StellarObjectGenerationUtility.CreateBlackHole(
                 massKg,
                 StellarObjectGenerationUtility.GetSchwarzschildRadiusMeters(massKg),
-                random.NextDouble(0.001, 10.0),
+                rotationPeriodSeconds,
                 ageYears,
                 metallicity,
+                temperatureKelvin,
                 hasAccretionDisk,
                 context.Orbit);
+        }
+
+        private static double GetAccretionDiskTemperatureKelvin(
+            double massSolar,
+            ref QuantumRandom random)
+        {
+            // This is the disk's visible effective colour temperature, not
+            // the black hole's Hawking temperature. The deliberately gentle
+            // mass relation leaves supermassive cores red/orange more often
+            // and stellar-mass disks blue-white more often, while the activity
+            // factor keeps individual generated systems visually distinct.
+            var massFactor = Math.Pow(
+                1_000_000.0 / Math.Max(1.0, massSolar),
+                0.10);
+            var activityFactor = random.NextDouble(0.55, 1.85);
+            var temperatureKelvin = 3_200.0 * massFactor * activityFactor;
+
+            return Math.Max(
+                1_200.0,
+                Math.Min(20_000.0, temperatureKelvin));
         }
 
         private static bool HasAccretionDisk(

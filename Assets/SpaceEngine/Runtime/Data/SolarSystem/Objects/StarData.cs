@@ -5,7 +5,13 @@ namespace SpaceEngine.Runtime.Data.SolarSystem.Objects
     {
         public double DensityKgPerCubicMeter { get; }
         public double SurfaceGravityMetersPerSecondSquared { get; }
-        public double SurfaceTemperatureKelvin { get; }
+
+        /// <summary>
+        /// Backwards-compatible name for the common characteristic
+        /// temperature. Star temperatures are surface temperatures.
+        /// </summary>
+        public double SurfaceTemperatureKelvin => TemperatureKelvin;
+
         public double RotationPeriodSeconds { get; }
         public double AgeYears { get; }
         public double Metallicity { get; }
@@ -21,12 +27,16 @@ namespace SpaceEngine.Runtime.Data.SolarSystem.Objects
             double ageYears,
             double metallicity,
             OrbitData orbit)
-            : base(massKg, radiusMeters, luminosityWatts, orbit)
+            : base(
+                massKg,
+                radiusMeters,
+                luminosityWatts,
+                surfaceTemperatureKelvin,
+                orbit)
         {
             DensityKgPerCubicMeter = densityKgPerCubicMeter;
             SurfaceGravityMetersPerSecondSquared =
                 surfaceGravityMetersPerSecondSquared;
-            SurfaceTemperatureKelvin = surfaceTemperatureKelvin;
             RotationPeriodSeconds = rotationPeriodSeconds;
             AgeYears = ageYears;
             Metallicity = metallicity;
@@ -39,7 +49,7 @@ namespace SpaceEngine.Runtime.Data.SolarSystem.Objects
                 RadiusMeters,
                 DensityKgPerCubicMeter,
                 SurfaceGravityMetersPerSecondSquared,
-                SurfaceTemperatureKelvin,
+                TemperatureKelvin,
                 LuminosityWatts,
                 RotationPeriodSeconds,
                 AgeYears,

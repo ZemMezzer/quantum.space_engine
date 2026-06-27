@@ -13,15 +13,14 @@ namespace SpaceEngine.Runtime.Core
     /// </summary>
     public sealed class CelestialAnchor3D : CelestialAnchor
     {
-        private readonly GalaxySpaceAnchor _galaxyAnchor;
         private readonly SeamlessSpaceAnchor _backend;
         private bool _isApplyingPosition;
 
         internal CelestialAnchor3D(SpaceEngine engine)
             : base(engine)
         {
-            _galaxyAnchor = new GalaxySpaceAnchor(engine.Configuration);
-            _backend = new SeamlessSpaceAnchor(_galaxyAnchor);
+            var galaxyAnchor = new GalaxySpaceAnchor(engine.Configuration);
+            _backend = new SeamlessSpaceAnchor(galaxyAnchor);
             _backend.ActiveSolarSystemChanged +=
                 HandleActiveSolarSystemChanged;
         }
