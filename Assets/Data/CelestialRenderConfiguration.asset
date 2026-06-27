@@ -13,17 +13,31 @@ MonoBehaviour:
   m_Name: CelestialRenderConfiguration
   m_EditorClassIdentifier: com.tiredsiren.quantum.space_engine.rendering::SpaceEngine.Rendering.CelestialRenderConfiguration
   galaxyRenderers:
-  - {fileID: 11400000, guid: 54d0ae5e01df26440a1909983997c2e3, type: 2}
-  - {fileID: 11400000, guid: 9147e1e185453964fa0afd4c3c699bda, type: 2}
-  - {fileID: 11400000, guid: 4fc693d4eb0d4c449afb9fc994e28bf2, type: 2}
-  - {fileID: 11400000, guid: d0e6cb7ea9724d74a8850c8efcbc5b46, type: 2}
-  - {fileID: 11400000, guid: 3302593f72dbb194b8fc014d096329e0, type: 2}
-  - {fileID: 11400000, guid: 87d7df716b6100244875913673aa9d27, type: 2}
-  - {fileID: 11400000, guid: 03f7d73377842b0439993de5cc5a1755, type: 2}
+  - entity: {fileID: 11400000, guid: 2ac8ab54d1b72f346b8d5ce77223706d, type: 2}
+    renderer: {fileID: 11400000, guid: 54d0ae5e01df26440a1909983997c2e3, type: 2}
+  - entity: {fileID: 11400000, guid: a6acdadb922255a49b29ef56c84c1b45, type: 2}
+    renderer: {fileID: 11400000, guid: 9147e1e185453964fa0afd4c3c699bda, type: 2}
+  - entity: {fileID: 11400000, guid: 9760adff33c989e409319553fd4b2c5e, type: 2}
+    renderer: {fileID: 11400000, guid: 4fc693d4eb0d4c449afb9fc994e28bf2, type: 2}
+  - entity: {fileID: 11400000, guid: 23ddaec488435db49a1dee22293b886b, type: 2}
+    renderer: {fileID: 11400000, guid: d0e6cb7ea9724d74a8850c8efcbc5b46, type: 2}
+  - entity: {fileID: 11400000, guid: 5ed9edc893f06bb4db3d9a51e4a96225, type: 2}
+    renderer: {fileID: 11400000, guid: 3302593f72dbb194b8fc014d096329e0, type: 2}
+  - entity: {fileID: 11400000, guid: a483dbacc9d80ba42b6ebbfc9de926e5, type: 2}
+    renderer: {fileID: 11400000, guid: 87d7df716b6100244875913673aa9d27, type: 2}
+  - entity: {fileID: 11400000, guid: 3c3dbb84e65c45c40a3d66dabdd84f7e, type: 2}
+    renderer: {fileID: 11400000, guid: 03f7d73377842b0439993de5cc5a1755, type: 2}
   stellarObjectRenderers:
-  - {fileID: 11400000, guid: 9e3b21c15f4c2fe408758519b2760a77, type: 2}
-  - {fileID: 11400000, guid: d99c92ca94fdca449b5ad605a5c1b98a, type: 2}
-  - {fileID: 11400000, guid: 01223391bc3f1204b91c35260b803f8d, type: 2}
+  - entity: {fileID: 11400000, guid: 1a0a3ebd7ceae6f4b9eee4b96e1da68c, type: 2}
+    renderer: {fileID: 11400000, guid: 5a4d9019e7d5db449baae873a5722a4c, type: 2}
+  - entity: {fileID: 11400000, guid: e206f4e6939022e499dc7b45dc32b40f, type: 2}
+    renderer: {fileID: 11400000, guid: 2b9b377a4f024a7419a8e4cc5a900a3a, type: 2}
+  - entity: {fileID: 11400000, guid: 7628b9deda7be6c418cf0def9f7155aa, type: 2}
+    renderer: {fileID: 11400000, guid: 1f2d0a53a2c409a4da50c96d7d564be1, type: 2}
+  - entity: {fileID: 11400000, guid: 7a93af0382e7cd241952d1ee2d91a2c7, type: 2}
+    renderer: {fileID: 11400000, guid: 868f22263383143479913cbf86f8bbd5, type: 2}
+  - entity: {fileID: 11400000, guid: fb485b9479ef32e4b94b0519a0a4a4ff, type: 2}
+    renderer: {fileID: 11400000, guid: 2045771426458a34d89b2f5ae7e95e7d, type: 2}
   aggregateStarSampleCount: 4096
   maximumDistantGalaxyPoints: 2048
   distantGalaxyPointHorizontalSectorRadius: 3
@@ -39,7 +53,7 @@ MonoBehaviour:
   externalGalaxyStarPointDiameterPixels: 1
   galaxyActivationDistanceInRadii: 1.2
   enableGalaxyGas: 1
-  galaxyGasRaymarchSteps: 24
+  galaxyGasRaymarchSteps: 40
   stellarFieldSectorRadius: 7
   stellarFieldVerticalSectorRadius: 7
   maximumStellarPoints: 10000

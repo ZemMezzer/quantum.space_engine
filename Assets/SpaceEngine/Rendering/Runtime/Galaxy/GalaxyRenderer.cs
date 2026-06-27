@@ -485,14 +485,34 @@ public sealed class GalaxyStarfieldRenderer
                     continue;
                 }
 
+                // Built-in renderer assets sample in unrotated galaxy shape
+                // space so their distribution matches the gas shader. The
+                // active field is stored in galaxy-local space, therefore
+                // apply the generated galaxy rotation exactly once here.
                 _samples.Add(new StarSample(
-                    sample.GalaxyLocalPositionLightYears,
+                    RotateShapeLocalPosition(
+                        sample.GalaxyLocalPositionLightYears,
+                        galaxy.RotationRadians),
                     sample.Brightness));
             }
 
             EnsureMatrixStorage(_samples.Count, ref _matrices);
         }
 
+        private static double3 RotateShapeLocalPosition(
+            double3 shapeLocalPosition,
+            double rotationRadians)
+        {
+            var cosine = Math.Cos(rotationRadians);
+            var sine = Math.Sin(rotationRadians);
+
+            return new double3(
+                shapeLocalPosition.x * cosine -
+                shapeLocalPosition.z * sine,
+                shapeLocalPosition.y,
+                shapeLocalPosition.x * sine +
+                shapeLocalPosition.z * cosine);
+        }
 
         private void RenderSamples()
         {
