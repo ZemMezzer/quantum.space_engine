@@ -12,9 +12,9 @@ namespace SpaceEngine.Runtime.Streaming
     [RequireComponent(typeof(Core.SpaceEngine))]
     public abstract class CelestialRenderer : MonoBehaviour
     {
-        public Core.SpaceEngine Engine { get; private set; }
+        protected Core.SpaceEngine Engine { get; private set; }
 
-        public CelestialAnchor Anchor { get; private set; }
+        protected CelestialAnchor Anchor { get; private set; }
 
         public abstract bool IsReady { get; }
 
