@@ -161,20 +161,33 @@ Shader "SpaceEngine/Streaming/Black Hole Screen Space Accretion Disk"
 
                 float radial01 = saturate((radialDistance - innerRadius) / max(outerRadius - innerRadius, 0.0001));
                 float angle = atan2(diskCoordinates.y, diskCoordinates.x);
-                float angularPhase = angle / BH_TAU + 0.5;
                 float angularPeriod = 4.0 + radial01 * 6.0;
                 float2 normalizedDisk = diskCoordinates / max(outerRadius, 0.0001);
-                float time = _SurfaceTime * _Speed;
 
-                // This offset already uses the physical disk plane and is
-                // continuous at the 0 / 2PI boundary.
+                // Make the disk visibly rotate from simulation time.
+                // Inner regions move faster than outer regions, which gives
+                // a clearer orbital feel without breaking the seamless tiling.
+                float time = _SurfaceTime * _Speed * 3.0;
+                float localAngularSpeed = lerp(0.22, 1.35, 1.0 - radial01);
+                float spinAngle = -time * localAngularSpeed;
+                float animatedAngle = angle + spinAngle;
+                float angularPhase = frac(animatedAngle / BH_TAU + 0.5);
+
+                float spinSin = sin(spinAngle);
+                float spinCos = cos(spinAngle);
+                float2 rotatedDisk = float2(
+                    normalizedDisk.x * spinCos - normalizedDisk.y * spinSin,
+                    normalizedDisk.x * spinSin + normalizedDisk.y * spinCos);
+
+                // This offset uses the rotated sampling frame, so the gas
+                // visibly orbits instead of only shimmering in place.
                 float2 warpOffset = float2(
-                    FractalNoise(normalizedDisk * 2.2 + float2(1.7 + _Seed * 3.0, -2.1 - _Seed * 5.0)),
-                    FractalNoise(normalizedDisk.yx * 2.6 + float2(-3.4 - _Seed * 7.0, 4.8 + _Seed * 11.0)));
+                    FractalNoise(rotatedDisk * 2.2 + float2(1.7 + _Seed * 3.0, -2.1 - _Seed * 5.0)),
+                    FractalNoise(rotatedDisk.yx * 2.6 + float2(-3.4 - _Seed * 7.0, 4.8 + _Seed * 11.0)));
                 warpOffset = (warpOffset - 0.5) * float2(0.18, 0.08);
 
                 float2 flowUv = float2(
-                    angularPhase * angularPeriod + time * (0.07 + (1.0 - radial01) * 0.20),
+                    angularPhase * angularPeriod + time * (0.12 + (1.0 - radial01) * 0.32),
                     radial01 * (6.0 + (1.0 - radial01) * 5.0));
                 flowUv += warpOffset;
 
