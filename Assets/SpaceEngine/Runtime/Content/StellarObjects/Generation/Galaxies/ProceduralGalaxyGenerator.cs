@@ -90,6 +90,17 @@ namespace SpaceEngine.Runtime.Content.StellarObjects.Generation.Galaxies
             in GalaxyData galaxy,
             long solarSystemID)
         {
+            // Solar-system coordinate zero is the galaxy-origin address. Its
+            // position is defined by the coordinate system itself, rather than
+            // sampled from this generator's density distribution.
+            if (solarSystemID == 0L)
+            {
+                return new SolarSystemLocationData(
+                    solarSystemID,
+                    double3.zero,
+                    GetGalaxyCentreEstimatedMassSolarMasses(galaxy));
+            }
+
             var positionSeed = GalaxyIDUtility.Combine(
                 galaxy.Seed,
                 CoordinatesData.ToUnsigned(solarSystemID));
@@ -127,6 +138,20 @@ namespace SpaceEngine.Runtime.Content.StellarObjects.Generation.Galaxies
             double3 localPositionLightYears)
         {
             return GetDensity(galaxy, localPositionLightYears) > 0.0001;
+        }
+
+        private static double GetGalaxyCentreEstimatedMassSolarMasses(
+            in GalaxyData galaxy)
+        {
+            var seed = GalaxyIDUtility.Combine(
+                galaxy.Seed,
+                SOLAR_SYSTEM_POSITION_SALT);
+            seed = GalaxyIDUtility.Combine(
+                seed,
+                SOLAR_SYSTEM_MASS_SALT);
+
+            var random = new QuantumRandom(seed);
+            return random.NextDouble(1_000_000.0, 12_000_000.0);
         }
 
         private GalaxySectorCandidateData GenerateCandidate(
